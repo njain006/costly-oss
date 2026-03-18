@@ -52,3 +52,34 @@ async def create_indexes():
     await db.platform_connections.create_index(
         [("user_id", ASCENDING), ("platform", ASCENDING)]
     )
+
+    # Warehouse actions index
+    await db.warehouse_actions.create_index(
+        [("user_id", ASCENDING), ("timestamp", DESCENDING)]
+    )
+
+    # Chat sessions indexes
+    await db.chat_sessions.create_index(
+        [("user_id", ASCENDING), ("session_id", ASCENDING)], unique=True
+    )
+    await db.chat_sessions.create_index(
+        [("user_id", ASCENDING), ("created_at", DESCENDING)]
+    )
+
+    # Digests index
+    await db.digests.create_index(
+        [("user_id", ASCENDING), ("date", DESCENDING)]
+    )
+    await db.digests.create_index(
+        [("user_id", ASCENDING), ("date", ASCENDING)], unique=True
+    )
+
+    # Team indexes
+    await db.teams.create_index([("owner_id", ASCENDING)])
+    await db.teams.create_index([("members.email", ASCENDING)])
+    await db.teams.create_index([("team_id", ASCENDING)], unique=True)
+
+    # Budget alerts index
+    await db.budget_alerts.create_index(
+        [("team_id", ASCENDING), ("month", ASCENDING), ("sent_at", DESCENDING)]
+    )

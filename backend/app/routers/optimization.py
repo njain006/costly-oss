@@ -1,8 +1,11 @@
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel, Field
 
 from app.deps import get_current_user, get_data_source
+from app.database import db
 from app.services.cache import cache
 from app.services.snowflake import (
     get_credit_price,
@@ -15,15 +18,15 @@ from app.services.snowflake import (
     sync_execute_resize,
     sync_execute_autosuspend,
 )
-from app.services.demo import (
-    generate_demo_warehouse_sizing,
-    generate_demo_autosuspend,
-    generate_demo_spillage,
-    generate_demo_query_patterns,
-    generate_demo_cost_attribution,
-    generate_demo_stale_tables,
-)
+
+
 from app.models.warehouse_action import WarehouseResize, WarehouseAutoSuspend
+from app.services.snowflake_actions import (
+    resize_warehouse as exec_resize,
+    set_autosuspend as exec_autosuspend,
+    suspend_warehouse as exec_suspend,
+    resume_warehouse as exec_resume,
+)
 from app.utils.constants import CACHE_TTL
 from app.utils.helpers import run_in_thread
 
@@ -39,7 +42,7 @@ async def warehouse_sizing(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_warehouse_sizing(), "fetched_at": fetched_at, "demo": True}
+        return {"recommendations": [], "total_monthly_savings": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:warehouse_sizing:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -61,7 +64,7 @@ async def autosuspend_analysis(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_autosuspend(), "fetched_at": fetched_at, "demo": True}
+        return {"recommendations": [], "total_monthly_savings": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:autosuspend:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -83,7 +86,7 @@ async def spillage(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_spillage(), "fetched_at": fetched_at, "demo": True}
+        return {"by_warehouse": [], "by_user": [], "top_queries": [], "summary": {"total_spill_gb": 0, "affected_queries": 0, "affected_warehouses": 0}, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:spillage:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -104,7 +107,7 @@ async def query_patterns(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_query_patterns(), "fetched_at": fetched_at, "demo": True}
+        return {"patterns": [], "total_patterns": 0, "total_cost_usd": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:query_patterns:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -126,7 +129,7 @@ async def cost_attribution(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_cost_attribution(), "fetched_at": fetched_at, "demo": True}
+        return {"by_user": [], "by_role": [], "by_database": [], "by_warehouse": [], "top_queries": [], "total_cost_usd": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:cost_attribution:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -148,7 +151,7 @@ async def stale_tables(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_stale_tables(), "fetched_at": fetched_at, "demo": True}
+        return {"stale_tables": [], "stale_count": 0, "stale_total_gb": 0, "stale_monthly_cost": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:stale_tables:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -189,3 +192,82 @@ async def update_autosuspend(
         cache.delete_prefix(f"{user_id}:autosuspend")
         cache.delete_prefix(f"{user_id}:warehouse")
     return result
+
+
+# --- New optimization execution endpoints ---
+
+
+@router.post("/api/optimization/warehouses/{name}/resize")
+async def optimization_resize_warehouse(
+    name: str,
+    body: WarehouseResize,
+    user_id: str = Depends(get_current_user),
+):
+    source = await get_data_source(user_id)
+    if not source:
+        raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
+    result = await exec_resize(source, name, body.new_size, user_id=user_id)
+    if result.get("success"):
+        cache.delete_prefix(f"{user_id}:warehouse")
+    return result
+
+
+class AutoSuspendBody(BaseModel):
+    seconds: int = Field(..., ge=0, le=86400)
+
+
+@router.post("/api/optimization/warehouses/{name}/autosuspend")
+async def optimization_set_autosuspend(
+    name: str,
+    body: AutoSuspendBody,
+    user_id: str = Depends(get_current_user),
+):
+    source = await get_data_source(user_id)
+    if not source:
+        raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
+    result = await exec_autosuspend(source, name, body.seconds, user_id=user_id)
+    if result.get("success"):
+        cache.delete_prefix(f"{user_id}:autosuspend")
+        cache.delete_prefix(f"{user_id}:warehouse")
+    return result
+
+
+@router.post("/api/optimization/warehouses/{name}/suspend")
+async def optimization_suspend_warehouse(
+    name: str,
+    user_id: str = Depends(get_current_user),
+):
+    source = await get_data_source(user_id)
+    if not source:
+        raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
+    result = await exec_suspend(source, name, user_id=user_id)
+    if result.get("success"):
+        cache.delete_prefix(f"{user_id}:warehouse")
+    return result
+
+
+@router.post("/api/optimization/warehouses/{name}/resume")
+async def optimization_resume_warehouse(
+    name: str,
+    user_id: str = Depends(get_current_user),
+):
+    source = await get_data_source(user_id)
+    if not source:
+        raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
+    result = await exec_resume(source, name, user_id=user_id)
+    if result.get("success"):
+        cache.delete_prefix(f"{user_id}:warehouse")
+    return result
+
+
+@router.get("/api/optimization/actions")
+async def list_optimization_actions(
+    limit: int = Query(50, ge=1, le=200),
+    user_id: str = Depends(get_current_user),
+):
+    cursor = db.warehouse_actions.find(
+        {"user_id": user_id},
+        {"_id": 0, "user_id": 0},
+    ).sort("timestamp", -1).limit(limit)
+    actions = await cursor.to_list(length=limit)
+    return {"actions": actions}

@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatCard from "@/components/stat-card";
-import DemoBanner from "@/components/demo-banner";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { COLORS, DATE_OPTIONS } from "@/lib/constants";
 import {
@@ -211,16 +210,12 @@ export default function OverviewPage() {
   const [days, setDays] = useState(30);
   const { data: liveData, loading } = useApi<UnifiedCosts>(`/platforms/costs?days=${days}`, [days]);
 
-  // Use live data if available and has real content, otherwise fall back to demo
-  const isDemo = !liveData || liveData.total_cost === 0 || liveData.demo;
-  const data: UnifiedCosts = useMemo(
-    () => (isDemo ? scaleDemoData(days) : liveData!),
-    [isDemo, liveData, days]
+  // Show empty state only when no platforms are connected (demo flag from backend)
+  const hasData = liveData && !liveData.demo;
+  const data: UnifiedCosts | null = useMemo(
+    () => (hasData ? liveData! : null),
+    [hasData, liveData]
   );
-
-  const dailyAvg = data.total_cost / (data.days || 1);
-  const aiCost = data.by_category.find((c) => c.category === "ai_inference")?.cost ?? 0;
-  const aiPct = data.total_cost > 0 ? (aiCost / data.total_cost) * 100 : 0;
 
   // Donut chart label renderer
   const renderCustomLabel = (props: PieLabelRenderProps) => {
@@ -262,11 +257,40 @@ export default function OverviewPage() {
     );
   }
 
+  if (!data) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Platform Overview</h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Unified cost intelligence across all connected data platforms
+          </p>
+        </div>
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="h-14 w-14 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+              <Database className="h-7 w-7 text-slate-400" />
+            </div>
+            <h2 className="text-lg font-semibold text-slate-900 mb-2">No platforms connected</h2>
+            <p className="text-sm text-slate-500 max-w-md mb-6">
+              Connect your data platforms to see real cost data. Costly supports AWS, Snowflake, OpenAI, Anthropic, dbt Cloud, and 10 more.
+            </p>
+            <Button onClick={() => window.location.href = "/settings"} className="gap-2">
+              <Zap className="h-4 w-4" />
+              Connect a Platform
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const dailyAvg = data.total_cost / (data.days || 1);
+  const aiCost = data.by_category.find((c) => c.category === "ai_inference")?.cost ?? 0;
+  const aiPct = data.total_cost > 0 ? (aiCost / data.total_cost) * 100 : 0;
+
   return (
     <div className="space-y-6">
-
-      {/* Demo banner */}
-      {isDemo && <DemoBanner />}
 
       {/* Header */}
       <div className="flex items-center justify-between">

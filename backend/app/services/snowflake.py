@@ -1,5 +1,6 @@
 import math
 import snowflake.connector
+from contextlib import contextmanager
 from datetime import datetime
 
 from app.services.encryption import decrypt_value
@@ -35,6 +36,16 @@ def build_sf_connection(conn_doc: dict):
     return snowflake.connector.connect(**params)
 
 
+@contextmanager
+def sf_connection(conn_doc: dict):
+    """Context manager that ensures Snowflake connections are always closed."""
+    conn = build_sf_connection(conn_doc)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def conn_to_response(doc: dict) -> dict:
     return {
         "connection_id": doc["connection_id"],
@@ -55,17 +66,16 @@ def conn_to_response(doc: dict) -> dict:
 
 def _sync_get_credit_price(conn_doc: dict) -> float:
     try:
-        sf = build_sf_connection(conn_doc)
-        cur = sf.cursor()
-        cur.execute("""
-            SELECT EFFECTIVE_RATE
-            FROM SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY
-            WHERE SERVICE_TYPE = 'COMPUTE'
-            ORDER BY DATE DESC LIMIT 1
-        """)
-        row = cur.fetchone()
-        sf.close()
-        return float(row[0]) if row else 3.0
+        with sf_connection(conn_doc) as sf:
+            cur = sf.cursor()
+            cur.execute("""
+                SELECT EFFECTIVE_RATE
+                FROM SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY
+                WHERE SERVICE_TYPE = 'COMPUTE'
+                ORDER BY DATE DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            return float(row[0]) if row else 3.0
     except Exception:
         return 3.0
 
@@ -81,74 +91,73 @@ async def get_credit_price(conn_doc: dict) -> float:
 
 
 def sync_dashboard(conn_doc: dict, days: int, credit_price: float) -> dict:
-    sf = build_sf_connection(conn_doc)
-    cur = sf.cursor()
-    cur.execute(f"""
-        SELECT DATE_TRUNC('day', START_TIME)::DATE AS day,
-               SUM(CREDITS_USED_COMPUTE * {credit_price}) AS compute_cost,
-               SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cloud_services_cost,
-               SUM((CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) * {credit_price}) AS cost,
-               SUM(CREDITS_USED_COMPUTE) AS credits
-        FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        GROUP BY 1 ORDER BY 1
-    """)
-    cost_trend = [
-        {
-            "date": str(r[0]),
-            "compute_cost": round(float(r[1] or 0), 2),
-            "cloud_services_cost": round(float(r[2] or 0), 2),
-            "cost": round(float(r[3] or 0), 2),
-            "credits": round(float(r[4] or 0), 2),
-        }
-        for r in cur.fetchall()
-    ]
-    cur.execute(f"""
-        SELECT WAREHOUSE_NAME,
-               SUM(CREDITS_USED_COMPUTE) AS credits,
-               SUM(CREDITS_USED_COMPUTE * {credit_price}) AS cost
-        FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        GROUP BY 1 ORDER BY 2 DESC LIMIT 10
-    """)
-    top_warehouses = [
-        {"name": r[0], "credits": round(float(r[1] or 0), 2), "cost": round(float(r[2] or 0), 2)}
-        for r in cur.fetchall()
-    ]
-    cur.execute(f"""
-        SELECT
-            COUNT(*) AS total_queries,
-            COUNT_IF(TOTAL_ELAPSED_TIME > 60000) AS expensive_queries,
-            COUNT_IF(EXECUTION_STATUS != 'SUCCESS') AS failed_queries
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-          AND IS_CLIENT_GENERATED_STATEMENT = FALSE
-    """)
-    row = cur.fetchone()
-    total_queries = int(row[0] or 0)
-    expensive_queries = int(row[1] or 0)
-    failed_queries = int(row[2] or 0)
-    cur.execute(f"""
-        SELECT USER_NAME,
-               SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
-               COUNT(*) AS queries
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-          AND IS_CLIENT_GENERATED_STATEMENT = FALSE
-        GROUP BY 1 ORDER BY 2 DESC LIMIT 10
-    """)
-    top_users = [
-        {"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": int(r[2] or 0)}
-        for r in cur.fetchall()
-    ]
-    cur.execute("""
-        SELECT (STORAGE_BYTES + STAGE_BYTES + FAILSAFE_BYTES) / 1073741824.0
-        FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
-        ORDER BY USAGE_DATE DESC LIMIT 1
-    """)
-    row = cur.fetchone()
-    storage_gb = round(float(row[0] or 0), 1) if row else 0.0
-    sf.close()
+    with sf_connection(conn_doc) as sf:
+        cur = sf.cursor()
+        cur.execute(f"""
+            SELECT DATE_TRUNC('day', START_TIME)::DATE AS day,
+                   SUM(CREDITS_USED_COMPUTE * {credit_price}) AS compute_cost,
+                   SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cloud_services_cost,
+                   SUM((CREDITS_USED_COMPUTE + CREDITS_USED_CLOUD_SERVICES) * {credit_price}) AS cost,
+                   SUM(CREDITS_USED_COMPUTE) AS credits
+            FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            GROUP BY 1 ORDER BY 1
+        """)
+        cost_trend = [
+            {
+                "date": str(r[0]),
+                "compute_cost": round(float(r[1] or 0), 2),
+                "cloud_services_cost": round(float(r[2] or 0), 2),
+                "cost": round(float(r[3] or 0), 2),
+                "credits": round(float(r[4] or 0), 2),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.execute(f"""
+            SELECT WAREHOUSE_NAME,
+                   SUM(CREDITS_USED_COMPUTE) AS credits,
+                   SUM(CREDITS_USED_COMPUTE * {credit_price}) AS cost
+            FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+        """)
+        top_warehouses = [
+            {"name": r[0], "credits": round(float(r[1] or 0), 2), "cost": round(float(r[2] or 0), 2)}
+            for r in cur.fetchall()
+        ]
+        cur.execute(f"""
+            SELECT
+                COUNT(*) AS total_queries,
+                COUNT_IF(TOTAL_ELAPSED_TIME > 60000) AS expensive_queries,
+                COUNT_IF(EXECUTION_STATUS != 'SUCCESS') AS failed_queries
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+              AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+        """)
+        row = cur.fetchone()
+        total_queries = int(row[0] or 0)
+        expensive_queries = int(row[1] or 0)
+        failed_queries = int(row[2] or 0)
+        cur.execute(f"""
+            SELECT USER_NAME,
+                   SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
+                   COUNT(*) AS queries
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+              AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+        """)
+        top_users = [
+            {"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+        cur.execute("""
+            SELECT (STORAGE_BYTES + STAGE_BYTES + FAILSAFE_BYTES) / 1073741824.0
+            FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
+            ORDER BY USAGE_DATE DESC LIMIT 1
+        """)
+        row = cur.fetchone()
+        storage_gb = round(float(row[0] or 0), 1) if row else 0.0
 
     raw_costs = [d["cost"] for d in cost_trend]
     anomalies = []
@@ -184,90 +193,88 @@ def sync_dashboard(conn_doc: dict, days: int, credit_price: float) -> dict:
 
 
 def sync_costs(conn_doc: dict, days: int, credit_price: float) -> dict:
-    sf = build_sf_connection(conn_doc)
-    cur = sf.cursor()
-    cur.execute(f"""
-        SELECT DATE_TRUNC('day', START_TIME)::DATE AS day,
-               WAREHOUSE_NAME,
-               SUM(CREDITS_USED_COMPUTE * {credit_price}) AS cost,
-               SUM(CREDITS_USED_COMPUTE) AS credits
-        FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        GROUP BY 1, 2 ORDER BY 1
-    """)
-    daily = [
-        {"date": str(r[0]), "warehouse": r[1], "cost": round(float(r[2] or 0), 2), "credits": round(float(r[3] or 0), 2)}
-        for r in cur.fetchall()
-    ]
-    cur.execute(f"""
-        SELECT USER_NAME,
-               SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
-               COUNT(*) AS queries
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        GROUP BY 1 ORDER BY 2 DESC LIMIT 20
-    """)
-    by_user = [{"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": r[2]} for r in cur.fetchall()]
-    sf.close()
+    with sf_connection(conn_doc) as sf:
+        cur = sf.cursor()
+        cur.execute(f"""
+            SELECT DATE_TRUNC('day', START_TIME)::DATE AS day,
+                   WAREHOUSE_NAME,
+                   SUM(CREDITS_USED_COMPUTE * {credit_price}) AS cost,
+                   SUM(CREDITS_USED_COMPUTE) AS credits
+            FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            GROUP BY 1, 2 ORDER BY 1
+        """)
+        daily = [
+            {"date": str(r[0]), "warehouse": r[1], "cost": round(float(r[2] or 0), 2), "credits": round(float(r[3] or 0), 2)}
+            for r in cur.fetchall()
+        ]
+        cur.execute(f"""
+            SELECT USER_NAME,
+                   SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
+                   COUNT(*) AS queries
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+        """)
+        by_user = [{"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": r[2]} for r in cur.fetchall()]
     return {"daily": daily, "by_user": by_user, "days": days}
 
 
 def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
-    sf = build_sf_connection(conn_doc)
-    cur = sf.cursor()
-    offset = (page - 1) * limit
-    cur.execute(f"""
-        SELECT COUNT(*) FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        AND EXECUTION_STATUS = 'SUCCESS'
-    """)
-    total = cur.fetchone()[0]
-    cur.execute(f"""
-        SELECT QUERY_ID, START_TIME, USER_NAME, WAREHOUSE_NAME,
-               TOTAL_ELAPSED_TIME, BYTES_SCANNED, ROWS_PRODUCED,
-               QUERY_TEXT, CREDITS_USED_CLOUD_SERVICES,
-               COMPILATION_TIME, EXECUTION_TIME,
-               QUEUED_PROVISIONING_TIME, QUEUED_OVERLOAD_TIME, QUEUED_REPAIR_TIME,
-               TRANSACTION_BLOCKED_TIME,
-               BYTES_SPILLED_TO_LOCAL_STORAGE, BYTES_SPILLED_TO_REMOTE_STORAGE,
-               PARTITIONS_SCANNED, PARTITIONS_TOTAL,
-               PERCENTAGE_SCANNED_FROM_CACHE,
-               QUERY_TYPE, ROLE_NAME
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-        AND EXECUTION_STATUS = 'SUCCESS'
-        AND IS_CLIENT_GENERATED_STATEMENT = FALSE
-        ORDER BY TOTAL_ELAPSED_TIME DESC
-        LIMIT {limit} OFFSET {offset}
-    """)
-    data = [
-        {
-            "query_id": r[0],
-            "start_time": str(r[1]),
-            "user": r[2],
-            "warehouse": r[3],
-            "duration_ms": int(r[4] or 0),
-            "bytes_scanned": int(r[5] or 0),
-            "rows_produced": int(r[6] or 0),
-            "query_text": (r[7] or "")[:200],
-            "credits": round(float(r[8] or 0), 6),
-            "compilation_ms": int(r[9] or 0),
-            "execution_ms": int(r[10] or 0),
-            "queue_provision_ms": int(r[11] or 0),
-            "queue_overload_ms": int(r[12] or 0),
-            "queue_repair_ms": int(r[13] or 0),
-            "blocked_ms": int(r[14] or 0),
-            "spill_local_gb": round(float(r[15] or 0) / 1073741824, 2),
-            "spill_remote_gb": round(float(r[16] or 0) / 1073741824, 2),
-            "partitions_scanned": int(r[17] or 0),
-            "partitions_total": int(r[18] or 0),
-            "cache_hit_pct": round(float(r[19] or 0), 1),
-            "query_type": r[20] or "SELECT",
-            "role": r[21] or "",
-        }
-        for r in cur.fetchall()
-    ]
-    sf.close()
+    with sf_connection(conn_doc) as sf:
+        cur = sf.cursor()
+        offset = (page - 1) * limit
+        cur.execute(f"""
+            SELECT COUNT(*) FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            AND EXECUTION_STATUS = 'SUCCESS'
+        """)
+        total = cur.fetchone()[0]
+        cur.execute(f"""
+            SELECT QUERY_ID, START_TIME, USER_NAME, WAREHOUSE_NAME,
+                   TOTAL_ELAPSED_TIME, BYTES_SCANNED, ROWS_PRODUCED,
+                   QUERY_TEXT, CREDITS_USED_CLOUD_SERVICES,
+                   COMPILATION_TIME, EXECUTION_TIME,
+                   QUEUED_PROVISIONING_TIME, QUEUED_OVERLOAD_TIME, QUEUED_REPAIR_TIME,
+                   TRANSACTION_BLOCKED_TIME,
+                   BYTES_SPILLED_TO_LOCAL_STORAGE, BYTES_SPILLED_TO_REMOTE_STORAGE,
+                   PARTITIONS_SCANNED, PARTITIONS_TOTAL,
+                   PERCENTAGE_SCANNED_FROM_CACHE,
+                   QUERY_TYPE, ROLE_NAME
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+            AND EXECUTION_STATUS = 'SUCCESS'
+            AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+            ORDER BY TOTAL_ELAPSED_TIME DESC
+            LIMIT {limit} OFFSET {offset}
+        """)
+        data = [
+            {
+                "query_id": r[0],
+                "start_time": str(r[1]),
+                "user": r[2],
+                "warehouse": r[3],
+                "duration_ms": int(r[4] or 0),
+                "bytes_scanned": int(r[5] or 0),
+                "rows_produced": int(r[6] or 0),
+                "query_text": (r[7] or "")[:200],
+                "credits": round(float(r[8] or 0), 6),
+                "compilation_ms": int(r[9] or 0),
+                "execution_ms": int(r[10] or 0),
+                "queue_provision_ms": int(r[11] or 0),
+                "queue_overload_ms": int(r[12] or 0),
+                "queue_repair_ms": int(r[13] or 0),
+                "blocked_ms": int(r[14] or 0),
+                "spill_local_gb": round(float(r[15] or 0) / 1073741824, 2),
+                "spill_remote_gb": round(float(r[16] or 0) / 1073741824, 2),
+                "partitions_scanned": int(r[17] or 0),
+                "partitions_total": int(r[18] or 0),
+                "cache_hit_pct": round(float(r[19] or 0), 1),
+                "query_type": r[20] or "SELECT",
+                "role": r[21] or "",
+            }
+            for r in cur.fetchall()
+        ]
     return {
         "data": data,
         "total": total,
@@ -279,10 +286,10 @@ def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
 
 
 def sync_storage(conn_doc: dict, days: int) -> dict:
-    sf = build_sf_connection(conn_doc)
-    cur = sf.cursor()
-    cur.execute("""
-        SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME,
+    with sf_connection(conn_doc) as sf:
+        cur = sf.cursor()
+        cur.execute("""
+            SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME,
                ACTIVE_BYTES / 1073741824.0             AS active_gb,
                TIME_TRAVEL_BYTES / 1073741824.0        AS time_travel_gb,
                FAILSAFE_BYTES / 1073741824.0           AS failsafe_gb,

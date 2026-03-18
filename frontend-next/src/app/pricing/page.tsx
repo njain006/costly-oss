@@ -54,7 +54,7 @@ const TIERS = [
       "SSO & RBAC",
       "Custom connectors",
       "Dedicated customer success",
-      "SLA guarantee",
+      "Custom SLA",
       "Custom reporting & exports",
       "On-prem deployment option",
     ],
@@ -226,8 +226,8 @@ export default function PricingPage() {
       {/* Feature comparison note */}
       <section className="bg-[#FAFBFC] py-12 px-6 text-center border-t border-slate-100">
         <p className="text-slate-500 text-sm max-w-lg mx-auto">
-          All plans include SOC 2 compliant data handling, 99.9% uptime SLA on Pro
-          and Enterprise, and end-to-end encryption in transit and at rest.
+          All plans include end-to-end encryption in transit and at rest.
+          Self-hosted deployment keeps your data in your own infrastructure.
         </p>
       </section>
 

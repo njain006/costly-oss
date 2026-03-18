@@ -15,6 +15,7 @@ google-auth
 apscheduler
 redis
 anthropic
+slowapi
 
 # Testing
 pytest

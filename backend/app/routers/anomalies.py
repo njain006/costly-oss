@@ -12,7 +12,7 @@ from app.services.anomaly_detector import (
 router = APIRouter(prefix="/api/anomalies", tags=["anomalies"])
 
 
-@router.get("/")
+@router.get("")
 async def list_anomalies(
     days: int = 30,
     unread: bool = False,

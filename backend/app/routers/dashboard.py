@@ -21,7 +21,13 @@ async def dashboard(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_dashboard(days), "fetched_at": fetched_at, "demo": True}
+        return {
+            "total_cost": 0, "total_credits": 0, "active_warehouses": 0,
+            "expensive_queries": 0, "query_count": 0, "failed_queries": 0,
+            "storage_gb": 0, "cost_trend": [], "top_warehouses": [],
+            "top_users": [], "credit_price": 0, "days": days,
+            "anomalies": [], "fetched_at": fetched_at, "demo": True,
+        }
     cache_key = f"{user_id}:dashboard:{days}"
     if refresh:
         cache.delete(cache_key)

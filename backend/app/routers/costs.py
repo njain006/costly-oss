@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from app.deps import get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_costs, get_credit_price
-from app.services.demo import generate_demo_costs
+
 from app.utils.constants import CACHE_TTL
 from app.utils.helpers import run_in_thread
 
@@ -21,7 +21,7 @@ async def costs(
     source = await get_data_source(user_id)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
-        return {**generate_demo_costs(days), "fetched_at": fetched_at, "demo": True}
+        return {"daily": [], "by_user": [], "days": days, "fetched_at": fetched_at, "demo": True}
     cache_key = f"{user_id}:costs:{days}"
     if refresh:
         cache.delete(cache_key)

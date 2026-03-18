@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from app.deps import get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_recommendations, get_credit_price
-from app.services.demo import generate_demo_recommendations
+
 from app.utils.constants import CACHE_TTL
 from app.utils.helpers import run_in_thread
 
@@ -17,7 +17,7 @@ async def recommendations(
 ):
     source = await get_data_source(user_id)
     if not source:
-        return generate_demo_recommendations()
+        return []
     cache_key = f"{user_id}:recommendations"
     if refresh:
         cache.delete(cache_key)

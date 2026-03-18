@@ -1,17 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/providers/auth-provider";
 import {
-  BarChart3,
   DollarSign,
-  Layers,
-  Zap,
-  History,
-  HardDrive,
-  Warehouse,
   Lightbulb,
   Bell,
   Settings,
@@ -24,62 +18,17 @@ import {
   Sparkles,
   ChevronDown,
   ChevronRight,
-  Cloud,
-  Database,
-  Cpu,
-  GitBranch,
-  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useApi } from "@/hooks/use-api";
+import { PLATFORM_REGISTRY, getViewPath, isPathInPlatform, type PlatformRegistryEntry } from "@/lib/platform-registry";
 
-/* ── Platform sections (collapsible) ── */
-
-interface PlatformSection {
-  key: string;
-  label: string;
-  icon: React.ElementType;
-  items: { path: string; label: string; icon: React.ElementType }[];
+interface SidebarSection {
+  entry: PlatformRegistryEntry;
+  connected: boolean;
 }
-
-const SNOWFLAKE_SECTION: PlatformSection = {
-  key: "snowflake",
-  label: "Snowflake",
-  icon: Database,
-  items: [
-    { path: "/dashboard", label: "Dashboard", icon: BarChart3 },
-    { path: "/costs", label: "Cost Analysis", icon: DollarSign },
-    { path: "/workloads", label: "Workloads", icon: Layers },
-    { path: "/queries", label: "Query Performance", icon: Zap },
-    { path: "/history", label: "Query History", icon: History },
-    { path: "/storage", label: "Storage", icon: HardDrive },
-    { path: "/warehouses", label: "Warehouses", icon: Warehouse },
-  ],
-};
-
-// Future platform sections — show when connected
-const AWS_SECTION: PlatformSection = {
-  key: "aws",
-  label: "AWS",
-  icon: Cloud,
-  items: [],
-};
-
-const DBT_SECTION: PlatformSection = {
-  key: "dbt_cloud",
-  label: "dbt Cloud",
-  icon: GitBranch,
-  items: [],
-};
-
-const AI_SECTION: PlatformSection = {
-  key: "ai",
-  label: "AI APIs",
-  icon: Cpu,
-  items: [],
-};
 
 export default function Sidebar() {
   const { user, isDemo, logout, exitDemo } = useAuth();
@@ -90,7 +39,6 @@ export default function Sidebar() {
   );
   const showOnboarding = !isDemo && user && (!connections || connections.length === 0);
 
-  // Track which platform sections are expanded
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["snowflake"]));
 
   const toggleSection = (key: string) => {
@@ -102,9 +50,34 @@ export default function Sidebar() {
     });
   };
 
-  // Auto-expand section if current path is inside it
-  const isPathInSection = (section: PlatformSection) =>
-    section.items.some((item) => pathname === item.path);
+  // Build platform sections: only show connected platforms (+ all in demo mode)
+  const sections: SidebarSection[] = useMemo(() => {
+    const connectedPlatforms = new Set(
+      (connections ?? []).map((c) => c.platform).filter(Boolean)
+    );
+
+    const result: SidebarSection[] = [];
+
+    if (isDemo) {
+      // Demo mode: show Snowflake + a few others to demonstrate the UI
+      const demoPlatforms = ["snowflake", "aws", "openai", "dbt_cloud"];
+      for (const key of demoPlatforms) {
+        if (PLATFORM_REGISTRY[key]) {
+          result.push({ entry: PLATFORM_REGISTRY[key], connected: true });
+        }
+      }
+    } else {
+      // Real users: only show platforms they've actually connected
+      // Always show Snowflake if they have a Snowflake connection
+      for (const [key, entry] of Object.entries(PLATFORM_REGISTRY)) {
+        if (connectedPlatforms.has(key)) {
+          result.push({ entry, connected: true });
+        }
+      }
+    }
+
+    return result;
+  }, [connections, isDemo]);
 
   const handleLogout = () => {
     if (isDemo) {
@@ -115,10 +88,6 @@ export default function Sidebar() {
       router.push("/");
     }
   };
-
-  // In demo mode, show Snowflake section. For real users, always show Snowflake
-  // (since it's the most built-out), and show others based on connections.
-  const platformSections: PlatformSection[] = [SNOWFLAKE_SECTION];
 
   const navLink = (path: string, label: string, Icon: React.ElementType, indent = false) => (
     <Link
@@ -186,7 +155,7 @@ export default function Sidebar() {
           </>
         )}
 
-        {/* ── Overview Section ── */}
+        {/* Overview */}
         <div className="text-[0.65rem] font-bold text-slate-600 uppercase tracking-wider px-3 mb-2">
           Overview
         </div>
@@ -196,65 +165,53 @@ export default function Sidebar() {
 
         <Separator className="bg-white/5 my-3" />
 
-        {/* ── Platform Sections (collapsible) ── */}
+        {/* Platform Sections */}
         <div className="text-[0.65rem] font-bold text-slate-600 uppercase tracking-wider px-3 mb-2">
           Platforms
         </div>
 
-        {platformSections.map((section) => {
-          const isExpanded = expandedSections.has(section.key) || isPathInSection(section);
-          const hasItems = section.items.length > 0;
+        {sections.map(({ entry, connected }) => {
+          const isActive = isPathInPlatform(pathname, entry);
+          const isExpanded = expandedSections.has(entry.key) || isActive;
+          const SectionIcon = entry.icon;
+
+          if (!connected) return null;
 
           return (
-            <div key={section.key} className="mb-1">
+            <div key={entry.key} className="mb-1">
               {/* Section header */}
               <button
-                onClick={() => hasItems && toggleSection(section.key)}
+                onClick={() => toggleSection(entry.key)}
                 className={cn(
                   "w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors",
-                  isPathInSection(section)
+                  isActive
                     ? "text-sky-300"
                     : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
                 )}
               >
-                <section.icon className="h-4 w-4 shrink-0" />
-                <span className="flex-1 text-left font-semibold">{section.label}</span>
-                {hasItems && (
-                  isExpanded
-                    ? <ChevronDown className="h-3.5 w-3.5 text-slate-600" />
-                    : <ChevronRight className="h-3.5 w-3.5 text-slate-600" />
-                )}
-                {!hasItems && (
-                  <span className="text-[0.6rem] text-slate-600 font-normal">Soon</span>
-                )}
+                <SectionIcon className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left font-semibold">{entry.label}</span>
+                {isExpanded
+                  ? <ChevronDown className="h-3.5 w-3.5 text-slate-600" />
+                  : <ChevronRight className="h-3.5 w-3.5 text-slate-600" />}
               </button>
 
-              {/* Section items */}
-              {isExpanded && hasItems && (
+              {/* Section views */}
+              {isExpanded && (
                 <div className="mt-0.5 space-y-0.5">
-                  {section.items.map(({ path, label, icon: Icon }) =>
-                    navLink(path, label, Icon, true)
-                  )}
+                  {entry.views.map((view) => {
+                    const path = getViewPath(entry, view.slug);
+                    return navLink(path, view.label, view.icon, true);
+                  })}
                 </div>
               )}
             </div>
           );
         })}
 
-        {/* Show placeholder sections for other platforms */}
-        {[AWS_SECTION, DBT_SECTION, AI_SECTION].map((section) => (
-          <div key={section.key} className="mb-1">
-            <div className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm text-slate-500">
-              <section.icon className="h-4 w-4 shrink-0" />
-              <span className="flex-1 text-left font-semibold">{section.label}</span>
-              <span className="text-[0.6rem] text-slate-600 font-normal">Soon</span>
-            </div>
-          </div>
-        ))}
-
         <Separator className="bg-white/5 my-3" />
 
-        {/* ── Tools Section ── */}
+        {/* Tools */}
         <div className="text-[0.65rem] font-bold text-slate-600 uppercase tracking-wider px-3 mb-2">
           Tools
         </div>

@@ -174,6 +174,52 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "resize_warehouse",
+        "description": "Resize a Snowflake warehouse. This will modify your Snowflake warehouse. Use only when the user explicitly asks to make changes. Executes ALTER WAREHOUSE SET WAREHOUSE_SIZE.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "warehouse_name": {"type": "string", "description": "Name of the warehouse to resize"},
+                "new_size": {"type": "string", "description": "New size (XSMALL, SMALL, MEDIUM, LARGE, XLARGE, 2XLARGE, 3XLARGE, 4XLARGE)"},
+            },
+            "required": ["warehouse_name", "new_size"],
+        },
+    },
+    {
+        "name": "set_autosuspend",
+        "description": "Set the auto-suspend timeout for a Snowflake warehouse. This will modify your Snowflake warehouse. Use only when the user explicitly asks to make changes. Executes ALTER WAREHOUSE SET AUTO_SUSPEND.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "warehouse_name": {"type": "string", "description": "Name of the warehouse"},
+                "seconds": {"type": "integer", "description": "Auto-suspend timeout in seconds (0-86400). 0 disables auto-suspend."},
+            },
+            "required": ["warehouse_name", "seconds"],
+        },
+    },
+    {
+        "name": "suspend_warehouse",
+        "description": "Immediately suspend a Snowflake warehouse. This will modify your Snowflake warehouse. Use only when the user explicitly asks to make changes. Executes ALTER WAREHOUSE SUSPEND.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "warehouse_name": {"type": "string", "description": "Name of the warehouse to suspend"},
+            },
+            "required": ["warehouse_name"],
+        },
+    },
+    {
+        "name": "resume_warehouse",
+        "description": "Resume a suspended Snowflake warehouse. This will modify your Snowflake warehouse. Use only when the user explicitly asks to make changes. Executes ALTER WAREHOUSE RESUME.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "warehouse_name": {"type": "string", "description": "Name of the warehouse to resume"},
+            },
+            "required": ["warehouse_name"],
+        },
+    },
 ]
 
 BASE_SYSTEM_PROMPT = """You are Costly AI, an expert data platform cost analyst. You help users understand and optimize their data platform spending across all connected platforms — Snowflake, AWS services, dbt Cloud, AI APIs, and more.
@@ -226,6 +272,22 @@ def _truncate(data, max_items: int = 30):
 async def _call_tool(tool_name: str, tool_input: dict, source, credit_price: float, user_id: str = None) -> dict:
     """Execute a tool call against real Snowflake data or demo data."""
     from app.utils.helpers import run_in_thread
+
+    # Handle warehouse action tools
+    action_tools = {"resize_warehouse", "set_autosuspend", "suspend_warehouse", "resume_warehouse"}
+    if tool_name in action_tools:
+        if source is None:
+            return {"success": False, "message": "Cannot execute actions in demo mode. Connect a Snowflake account first."}
+        from app.services.snowflake_actions import (
+            resize_warehouse, set_autosuspend, suspend_warehouse, resume_warehouse,
+        )
+        action_map = {
+            "resize_warehouse": lambda: resize_warehouse(source, tool_input["warehouse_name"], tool_input["new_size"], user_id=user_id),
+            "set_autosuspend": lambda: set_autosuspend(source, tool_input["warehouse_name"], tool_input["seconds"], user_id=user_id),
+            "suspend_warehouse": lambda: suspend_warehouse(source, tool_input["warehouse_name"], user_id=user_id),
+            "resume_warehouse": lambda: resume_warehouse(source, tool_input["warehouse_name"], user_id=user_id),
+        }
+        return await action_map[tool_name]()
 
     # Handle cross-platform tools
     if tool_name == "get_platform_costs":
@@ -313,13 +375,16 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
     """Run the Costly AI agent with tool use in a loop until a final text response."""
     provider, client = _get_llm_client()
 
+    max_iterations = 10
+
     api_messages = []
     for msg in messages:
         api_messages.append({"role": msg["role"], "content": msg["content"]})
 
     system_prompt = _build_system_prompt(messages)
+    accumulated_text = []
 
-    while True:
+    for _iteration in range(max_iterations):
         response = client.messages.create(
             model=settings.llm_model,
             max_tokens=4096,
@@ -328,15 +393,22 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
             messages=api_messages,
         )
 
+        # Collect any text from this response
+        text_parts = [b.text for b in response.content if b.type == "text"]
+        if text_parts:
+            accumulated_text.extend(text_parts)
+
         if response.stop_reason == "end_turn":
-            text_parts = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(text_parts)
+            return "\n".join(accumulated_text)
 
         # Process tool uses
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = await _call_tool(block.name, block.input, source, credit_price, user_id)
+                try:
+                    result = await _call_tool(block.name, block.input, source, credit_price, user_id)
+                except Exception as e:
+                    result = {"error": str(e)}
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -344,9 +416,112 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
                 })
 
         if not tool_results:
-            text_parts = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(text_parts) if text_parts else "I wasn't able to process that request."
+            return "\n".join(accumulated_text) if accumulated_text else "I wasn't able to process that request."
 
         # Append assistant response and tool results, then loop
         api_messages.append({"role": "assistant", "content": response.content})
         api_messages.append({"role": "user", "content": tool_results})
+
+    # Reached max iterations
+    limit_msg = "I've reached my analysis limit. Here's what I found so far:"
+    if accumulated_text:
+        return f"{limit_msg}\n\n" + "\n".join(accumulated_text)
+    return f"{limit_msg}\n\nI was unable to complete the analysis within the allowed number of steps. Please try a more specific question."
+
+
+async def run_agent_stream(messages: list[dict], source, credit_price: float, user_id: str = None):
+    """Run the Costly AI agent with streaming. Yields SSE event dicts.
+
+    Uses the Anthropic streaming API to send text chunks as they arrive.
+    Tool calls are handled in a loop, with status events emitted for each.
+    """
+    provider, client = _get_llm_client()
+
+    if provider != "anthropic":
+        # Fallback: run non-streaming and yield the full response
+        result = await run_agent(messages, source, credit_price, user_id=user_id)
+        yield {"type": "text", "content": result}
+        return
+
+    max_iterations = 10
+
+    api_messages = []
+    for msg in messages:
+        api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    system_prompt = _build_system_prompt(messages)
+
+    for _iteration in range(max_iterations):
+        # Use Anthropic streaming API
+        collected_content = []
+        stop_reason = None
+
+        with client.messages.stream(
+            model=settings.llm_model,
+            max_tokens=4096,
+            system=system_prompt,
+            tools=TOOLS,
+            messages=api_messages,
+        ) as stream:
+            current_block_type = None
+            current_tool_name = None
+
+            for event in stream:
+                if event.type == "content_block_start":
+                    if event.content_block.type == "text":
+                        current_block_type = "text"
+                    elif event.content_block.type == "tool_use":
+                        current_block_type = "tool_use"
+                        current_tool_name = event.content_block.name
+                        yield {
+                            "type": "tool_call",
+                            "name": current_tool_name,
+                            "status": "calling",
+                        }
+
+                elif event.type == "text":
+                    yield {"type": "text", "content": event.text}
+
+            # Get the final message object after stream completes
+            response = stream.get_final_message()
+            stop_reason = response.stop_reason
+            collected_content = response.content
+
+        if stop_reason == "end_turn":
+            return
+
+        # Process tool uses
+        tool_results = []
+        for block in collected_content:
+            if block.type == "tool_use":
+                try:
+                    result = await _call_tool(
+                        block.name, block.input, source, credit_price, user_id
+                    )
+                except Exception as e:
+                    result = {"error": str(e)}
+
+                yield {
+                    "type": "tool_result",
+                    "name": block.name,
+                    "status": "done",
+                }
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, default=str),
+                })
+
+        if not tool_results:
+            return
+
+        # Append assistant response and tool results, then loop
+        api_messages.append({"role": "assistant", "content": collected_content})
+        api_messages.append({"role": "user", "content": tool_results})
+
+    # Reached max iterations
+    yield {
+        "type": "text",
+        "content": "I've reached my analysis limit. Please try a more specific question.",
+    }

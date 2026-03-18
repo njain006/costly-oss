@@ -70,7 +70,7 @@ const CONNECTORS: ConnectorDef[] = [
     fields: [
       { key: "aws_access_key_id", label: "Access Key ID", type: "text", placeholder: "AKIA..." },
       { key: "aws_secret_access_key", label: "Secret Access Key", type: "password", placeholder: "Secret key" },
-      { key: "region", label: "Region", type: "text", placeholder: "us-east-1" },
+      { key: "region", label: "Region (optional)", type: "text", placeholder: "us-east-1" },
     ],
   },
   {
@@ -319,10 +319,17 @@ function ConnectDialog({
     setSaving(true);
     setError(null);
     try {
+      // Fill in defaults for optional fields left empty
+      const creds = { ...credentials };
+      for (const f of connector.fields) {
+        if (!creds[f.key] && f.label.toLowerCase().includes("optional") && f.placeholder) {
+          creds[f.key] = f.placeholder;
+        }
+      }
       await api.post("/platforms/connect", {
         platform: connector.key,
         name: connName,
-        credentials,
+        credentials: creds,
       });
       handleClose();
       onSuccess();
@@ -333,10 +340,13 @@ function ConnectDialog({
     }
   };
 
+  // Fields with "(optional)" in the label are not required
   const isFormValid =
     !!connector &&
     connName.trim().length > 0 &&
-    connector.fields.every((f) => !!credentials[f.key]);
+    connector.fields.every(
+      (f) => f.label.toLowerCase().includes("optional") || !!credentials[f.key]
+    );
 
   if (!connector) return null;
 

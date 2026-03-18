@@ -93,11 +93,16 @@ async def add_platform_connection(user_id: str, platform: str, name: str, creden
 
 async def test_platform_connection(platform: str, credentials: dict) -> dict:
     """Test a platform connection without storing it."""
+    from app.utils.helpers import run_in_thread
+
     connector_cls = CONNECTOR_MAP.get(platform)
     if not connector_cls:
         return {"success": False, "message": f"Unsupported platform: {platform}"}
-    connector = connector_cls(credentials)
-    return connector.test_connection()
+    try:
+        connector = connector_cls(credentials)
+        return await run_in_thread(connector.test_connection)
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 async def sync_platform_costs(user_id: str, connection_id: str, days: int = 30) -> dict:

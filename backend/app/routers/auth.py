@@ -2,9 +2,11 @@ import uuid
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from passlib.context import CryptContext
 from jose import jwt
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.config import settings
 from app.database import db
@@ -17,6 +19,7 @@ from app.services.email import send_reset_email
 from app.utils.helpers import run_in_thread
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+limiter = Limiter(key_func=get_remote_address)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -43,7 +46,8 @@ def _create_tokens(user_id: str) -> dict:
 
 
 @router.post("/register")
-async def register(user: UserRegister):
+@limiter.limit("5/minute")
+async def register(request: Request, user: UserRegister):
     if await db.users.find_one({"email": user.email}):
         raise HTTPException(400, "Email already registered")
     user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -67,7 +71,8 @@ async def register(user: UserRegister):
 
 
 @router.post("/login")
-async def login(user: UserLogin):
+@limiter.limit("5/minute")
+async def login(request: Request, user: UserLogin):
     existing = await db.users.find_one({"email": user.email})
     if not existing or not pwd_context.verify(user.password, existing["password_hash"]):
         raise HTTPException(401, "Invalid email or password")

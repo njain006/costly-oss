@@ -25,7 +25,7 @@ from app.services.pricing import (
 router = APIRouter(prefix="/api/platforms", tags=["platforms"])
 
 
-@router.get("/")
+@router.get("")
 async def list_connections(user_id: str = Depends(get_current_user)):
     conns = await get_platform_connections(user_id)
     return [

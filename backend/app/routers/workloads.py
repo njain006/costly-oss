@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from app.deps import get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_workloads, sync_workload_runs
-from app.services.demo import generate_demo_workloads, generate_demo_workload_runs
+
 from app.utils.constants import CACHE_TTL
 from app.utils.helpers import run_in_thread
 
@@ -18,7 +18,7 @@ async def workloads_endpoint(
 ):
     source = await get_data_source(user_id)
     if not source:
-        return generate_demo_workloads(days)
+        return {"workloads": [], "total_workloads": 0, "total_executions": 0, "days": days, "demo": True}
     cache_key = f"{user_id}:workloads:{days}"
     if refresh:
         cache.delete(cache_key)
@@ -38,5 +38,5 @@ async def workload_runs(
 ):
     source = await get_data_source(user_id)
     if not source:
-        return generate_demo_workload_runs(workload_id, days)
+        return {"runs": [], "workload_id": workload_id, "demo": True}
     return await run_in_thread(sync_workload_runs, source, workload_id, days)

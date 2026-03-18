@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from app.deps import get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_queries
-from app.services.demo import generate_demo_queries_paginated
+
 from app.utils.constants import CACHE_TTL
 from app.utils.helpers import run_in_thread
 
@@ -20,7 +20,7 @@ async def queries(
 ):
     source = await get_data_source(user_id)
     if not source:
-        return generate_demo_queries_paginated(page, limit)
+        return {"data": [], "total": 0, "page": page, "pages": 0, "limit": limit, "days": 7, "demo": True}
     cache_key = f"{user_id}:queries:{days}:{page}:{limit}"
     if refresh:
         cache.delete(cache_key)

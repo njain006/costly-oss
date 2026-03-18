@@ -1,19 +1,8 @@
 # Costly — Open-Source Data Platform Cost Intelligence
 
-[![CI](https://github.com/njain006/costly-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/njain006/costly-oss/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Connectors: 15+](https://img.shields.io/badge/Connectors-15%2B-green.svg)](#supported-platforms)
 
 An open-source, AI-powered cost intelligence platform for data teams. Connect 15+ platforms — warehouses, pipelines, BI tools, AI APIs, CI/CD — and see every dollar your data stack costs in one dashboard.
-
-![Costly Dashboard](docs/images/dashboard-preview.png)
-
-## Why Costly?
-
-- **Vendor-neutral, single pane of glass.** Most cost tools cover one cloud or one warehouse. Costly normalizes spend across Snowflake, BigQuery, Databricks, AWS, dbt Cloud, OpenAI, and more into one unified view.
-- **AI agent that understands your stack.** Ask natural-language questions about your spend. The agent has 15+ tools and platform-specific expert knowledge — not just a chatbot wrapper.
-- **Self-hosted and open source.** Your credentials and cost data never leave your infrastructure. Deploy with Docker Compose in minutes.
-- **Built for customization.** Plug in your negotiated rates (Snowflake credits, AWS EDP, per-model AI pricing), add new connectors, or extend the anomaly detection to fit your workflow.
 
 ## What it does
 
@@ -40,7 +29,7 @@ An open-source, AI-powered cost intelligence platform for data teams. Connect 15
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Next.js 15  │────>│  FastAPI      │────>│  MongoDB 7   │
+│  Next.js 15  │────▶│  FastAPI      │────▶│  MongoDB 7   │
 │  Frontend    │     │  Backend      │     │              │
 └─────────────┘     └──────┬───────┘     └──────────────┘
                            │
@@ -80,8 +69,8 @@ An open-source, AI-powered cost intelligence platform for data teams. Connect 15
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/njain006/costly-oss.git
-cd costly-oss
+git clone https://github.com/costlyai/costly.git
+cd costly
 
 # Copy example env and fill in your values
 cp backend/.env.example backend/.env
@@ -149,7 +138,7 @@ npm run dev
 ## Project Structure
 
 ```
-costly-oss/
+costly/
 ├── backend/
 │   └── app/
 │       ├── main.py              # FastAPI app, scheduler, startup
