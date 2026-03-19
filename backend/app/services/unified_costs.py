@@ -22,9 +22,11 @@ from app.services.connectors.tableau_connector import TableauConnector
 from app.services.connectors.github_connector import GitHubConnector
 from app.services.connectors.gitlab_connector import GitLabConnector
 from app.services.connectors.omni_connector import OmniConnector
+from app.services.connectors.snowflake_connector import SnowflakeConnector
 from app.services.encryption import decrypt_value
 
 CONNECTOR_MAP: dict[str, type[BaseConnector]] = {
+    "snowflake": SnowflakeConnector,
     "aws": AWSConnector,
     "anthropic": AnthropicConnector,
     "dbt_cloud": DbtCloudConnector,
@@ -72,7 +74,7 @@ async def add_platform_connection(user_id: str, platform: str, name: str, creden
 
     encrypted_creds = {}
     for k, v in credentials.items():
-        if k in ("region",):  # Don't encrypt non-secret fields
+        if k in ("region", "account", "warehouse", "database", "schema_name", "role"):  # Don't encrypt non-secret fields
             encrypted_creds[k] = v
         else:
             encrypted_creds[k] = encrypt_value(v)

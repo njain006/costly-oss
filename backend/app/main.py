@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+import redis as sync_redis
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,12 +17,76 @@ from app.services.cost_sync import sync_all_platform_costs
 from app.services.budget_checker import check_all_budgets
 from app.services.cost_digest import generate_and_store_all_digests
 
+# ---------------------------------------------------------------------------
+# Distributed scheduler lock — prevents N Uvicorn workers from each running
+# the same scheduled job. Only the worker that acquires the Redis lock runs.
+# ---------------------------------------------------------------------------
+_redis_lock_client = None
+
+
+def _get_redis_for_lock():
+    global _redis_lock_client
+    if _redis_lock_client is None:
+        _redis_lock_client = sync_redis.from_url("redis://redis:6379", decode_responses=True)
+    return _redis_lock_client
+
+
+async def _locked_evaluate_alerts():
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:evaluate_alerts", "1", nx=True, ex=300):
+        return
+    try:
+        await evaluate_all_alerts()
+    finally:
+        r.delete("costly:lock:evaluate_alerts")
+
+
+async def _locked_check_budgets():
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:check_budgets", "1", nx=True, ex=3600):
+        return
+    try:
+        await check_all_budgets()
+    finally:
+        r.delete("costly:lock:check_budgets")
+
+
+async def _locked_sync_query_history():
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:sync_query_history", "1", nx=True, ex=21600):
+        return
+    try:
+        await sync_all_users_query_history()
+    finally:
+        r.delete("costly:lock:sync_query_history")
+
+
+async def _locked_sync_costs():
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:sync_costs", "1", nx=True, ex=21600):
+        return
+    try:
+        await sync_all_platform_costs()
+    finally:
+        r.delete("costly:lock:sync_costs")
+
+
+async def _locked_cost_digest():
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:cost_digest", "1", nx=True, ex=3600):
+        return
+    try:
+        await generate_and_store_all_digests()
+    finally:
+        r.delete("costly:lock:cost_digest")
+
+
 from app.routers import (
     auth, connections, dashboard, costs, queries,
     storage, warehouses, workloads, recommendations,
     alerts, history, debug, optimization, admin,
     public_demo, chat, platforms, anomalies, platform_views,
-    teams, settings as settings_router,
+    teams, settings as settings_router, ai_costs,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -60,6 +125,7 @@ app.include_router(platforms.router)
 app.include_router(anomalies.router)
 app.include_router(teams.router)
 app.include_router(settings_router.router)
+app.include_router(ai_costs.router)
 
 @app.get("/api/health")
 async def health_check():
@@ -72,22 +138,22 @@ _scheduler = AsyncIOScheduler()
 @app.on_event("startup")
 async def startup_event():
     await create_indexes()
-    _scheduler.add_job(evaluate_all_alerts, "interval", minutes=15, id="alert_evaluator")
-    _scheduler.add_job(check_all_budgets, "interval", hours=1, id="budget_checker")
-    _scheduler.add_job(sync_all_users_query_history, "interval", hours=6, id="query_history_sync")
-    _scheduler.add_job(sync_all_platform_costs, "interval", hours=6, id="platform_cost_sync")
+    _scheduler.add_job(_locked_evaluate_alerts, "interval", minutes=15, id="alert_evaluator")
+    _scheduler.add_job(_locked_check_budgets, "interval", hours=1, id="budget_checker")
+    _scheduler.add_job(_locked_sync_query_history, "interval", hours=6, id="query_history_sync")
+    _scheduler.add_job(_locked_sync_costs, "interval", hours=6, id="platform_cost_sync")
     _scheduler.add_job(
-        sync_all_users_query_history, "date",
+        _locked_sync_query_history, "date",
         run_date=datetime.utcnow() + timedelta(seconds=90),
         id="query_history_boot",
     )
     _scheduler.add_job(
-        sync_all_platform_costs, "date",
+        _locked_sync_costs, "date",
         run_date=datetime.utcnow() + timedelta(seconds=120),
         id="platform_cost_boot",
     )
     _scheduler.add_job(
-        generate_and_store_all_digests, "cron",
+        _locked_cost_digest, "cron",
         hour=9, minute=0, id="daily_cost_digest",
     )
     _scheduler.start()

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     db_name: str = "costly"
 
     # JWT
-    jwt_secret: str = "change-this-secret-key"
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
@@ -47,3 +47,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.jwt_secret or settings.jwt_secret == "change-this-secret-key":
+    raise RuntimeError(
+        "JWT_SECRET is not configured. "
+        "Generate one with: openssl rand -hex 32"
+    )

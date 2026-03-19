@@ -50,7 +50,7 @@ async def check_all_budgets():
             # Aggregate current month spend
             pipeline = [
                 {"$match": cost_query},
-                {"$group": {"_id": None, "total": {"$sum": "$cost"}}},
+                {"$group": {"_id": None, "total": {"$sum": "$cost_usd"}}},
             ]
             result = await db.unified_costs.aggregate(pipeline).to_list(1)
             current_spend = result[0]["total"] if result else 0.0

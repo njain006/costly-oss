@@ -90,7 +90,8 @@ async def login(request: Request, user: UserLogin):
 
 
 @router.post("/refresh")
-async def refresh_token(body: RefreshTokenRequest):
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, body: RefreshTokenRequest):
     try:
         payload = jwt.decode(body.refresh_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         if payload.get("type") != "refresh":
@@ -131,7 +132,8 @@ async def change_password(body: ChangePassword, user_id: str = Depends(get_curre
 
 
 @router.post("/forgot-password")
-async def forgot_password(body: ForgotPassword):
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, body: ForgotPassword):
     user = await db.users.find_one({"email": body.email.lower().strip()})
     if user:
         token = secrets.token_urlsafe(32)

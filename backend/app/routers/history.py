@@ -4,7 +4,9 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from fastapi.responses import StreamingResponse
 from pymongo import ASCENDING, DESCENDING
 
@@ -16,6 +18,7 @@ from app.utils.constants import CREDITS_MAP
 from pymongo import UpdateOne
 
 router = APIRouter(tags=["history"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 def _build_filter(user_id: str, days: int, warehouse: Optional[str], user_name: Optional[str],
@@ -49,7 +52,9 @@ def _build_filter(user_id: str, days: int, warehouse: Optional[str], user_name: 
 
 
 @router.post("/api/sync/queries")
+@limiter.limit("2/minute")
 async def manual_sync_queries(
+    request: Request,
     days: int = Query(7, ge=1, le=90),
     user_id: str = Depends(get_current_user),
 ):

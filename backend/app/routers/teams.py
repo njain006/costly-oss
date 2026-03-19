@@ -121,7 +121,7 @@ async def get_team(team_id: str, user_id: str = Depends(get_current_user)):
         {"$match": cost_query},
         {"$group": {
             "_id": "$platform",
-            "total": {"$sum": "$cost"},
+            "total": {"$sum": "$cost_usd"},
         }},
     ]
     cost_agg = await db.unified_costs.aggregate(pipeline).to_list(100)
@@ -256,7 +256,7 @@ async def get_budget_status(team_id: str, user_id: str = Depends(get_current_use
 
     pipeline = [
         {"$match": cost_query},
-        {"$group": {"_id": None, "total": {"$sum": "$cost"}}},
+        {"$group": {"_id": None, "total": {"$sum": "$cost_usd"}}},
     ]
     result = await db.unified_costs.aggregate(pipeline).to_list(1)
     current_spend = result[0]["total"] if result else 0.0
@@ -306,21 +306,21 @@ async def get_team_costs(team_id: str, days: int = 30, user_id: str = Depends(ge
     # By platform
     by_platform = await db.unified_costs.aggregate([
         {"$match": cost_query},
-        {"$group": {"_id": "$platform", "total": {"$sum": "$cost"}}},
+        {"$group": {"_id": "$platform", "total": {"$sum": "$cost_usd"}}},
         {"$sort": {"total": -1}},
     ]).to_list(100)
 
     # By date (daily totals)
     by_date = await db.unified_costs.aggregate([
         {"$match": cost_query},
-        {"$group": {"_id": "$date", "total": {"$sum": "$cost"}}},
+        {"$group": {"_id": "$date", "total": {"$sum": "$cost_usd"}}},
         {"$sort": {"_id": 1}},
     ]).to_list(1000)
 
     # By service
     by_service = await db.unified_costs.aggregate([
         {"$match": cost_query},
-        {"$group": {"_id": {"platform": "$platform", "service": "$service"}, "total": {"$sum": "$cost"}}},
+        {"$group": {"_id": {"platform": "$platform", "service": "$service"}, "total": {"$sum": "$cost_usd"}}},
         {"$sort": {"total": -1}},
         {"$limit": 20},
     ]).to_list(20)

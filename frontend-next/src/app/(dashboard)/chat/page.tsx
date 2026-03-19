@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bot, Send, User, Sparkles } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -124,16 +125,15 @@ export default function ChatPage() {
               }`}
             >
               <div
-                className={`text-sm whitespace-pre-wrap leading-relaxed ${
-                  msg.role === "assistant" ? "text-slate-700 prose prose-sm prose-slate max-w-none" : ""
+                className={`text-sm leading-relaxed ${
+                  msg.role === "assistant" ? "text-slate-700 prose prose-sm prose-slate max-w-none" : "whitespace-pre-wrap"
                 }`}
-                dangerouslySetInnerHTML={
-                  msg.role === "assistant"
-                    ? { __html: formatMarkdown(msg.content) }
-                    : undefined
-                }
               >
-                {msg.role === "user" ? msg.content : undefined}
+                {msg.role === "assistant" ? (
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                ) : (
+                  msg.content
+                )}
               </div>
             </Card>
             {msg.role === "user" && (
@@ -189,12 +189,3 @@ export default function ChatPage() {
   );
 }
 
-function formatMarkdown(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/`(.*?)`/g, '<code class="bg-slate-100 px-1 py-0.5 rounded text-xs">$1</code>')
-    .replace(/\n/g, "<br />");
-}

@@ -64,7 +64,10 @@ async def connect_platform(
 
 
 @router.post("/test")
-async def test_connection(body: PlatformConnectionCreate):
+async def test_connection(
+    body: PlatformConnectionCreate,
+    user_id: str = Depends(get_current_user),
+):
     return await test_platform_connection(body.platform, body.credentials)
 
 

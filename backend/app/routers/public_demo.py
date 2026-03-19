@@ -9,6 +9,11 @@ from datetime import datetime
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from starlette.requests import Request
+
+limiter = Limiter(key_func=get_remote_address)
 
 from app.services.unified_costs import CONNECTOR_MAP
 from app.services.demo import (
@@ -138,7 +143,8 @@ class DemoChatRequest(BaseModel):
 
 
 @router.post("/chat")
-async def demo_chat(body: DemoChatRequest):
+@limiter.limit("5/minute")
+async def demo_chat(request: Request, body: DemoChatRequest):
     from app.services.agent import run_agent
     if not body.messages:
         return {"response": "Please send a message.", "demo": True}

@@ -82,9 +82,11 @@ const CONNECTORS: ConnectorDef[] = [
     accentColor: "bg-cyan-50 border-cyan-100",
     badgeColor: "bg-cyan-100 text-cyan-700",
     fields: [
-      { key: "account", label: "Account", type: "text", placeholder: "xy12345.us-east-1" },
-      { key: "user", label: "User", type: "text", placeholder: "COSTLY_READER" },
-      { key: "private_key", label: "Private Key", type: "password", placeholder: "Paste RSA private key" },
+      { key: "account", label: "Account Identifier", type: "text", placeholder: "xy12345.us-east-1" },
+      { key: "user", label: "User", type: "text", placeholder: "COSTLY_USER" },
+      { key: "private_key", label: "Private Key (PEM)", type: "textarea", placeholder: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----" },
+      { key: "warehouse", label: "Warehouse (optional)", type: "text", placeholder: "COMPUTE_WH" },
+      { key: "role", label: "Role (optional)", type: "text", placeholder: "COSTLY_ROLE" },
     ],
   },
   {
@@ -375,16 +377,28 @@ function ConnectDialog({
           {connector.fields.map((field) => (
             <div key={field.key}>
               <Label htmlFor={field.key}>{field.label}</Label>
-              <Input
-                id={field.key}
-                className="mt-1.5"
-                type={field.type}
-                value={credentials[field.key] || ""}
-                onChange={(e) =>
-                  setCredentials({ ...credentials, [field.key]: e.target.value })
-                }
-                placeholder={field.placeholder}
-              />
+              {field.type === "textarea" ? (
+                <textarea
+                  id={field.key}
+                  className="mt-1.5 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono h-28 resize-none focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                  value={credentials[field.key] || ""}
+                  onChange={(e) =>
+                    setCredentials({ ...credentials, [field.key]: e.target.value })
+                  }
+                  placeholder={field.placeholder}
+                />
+              ) : (
+                <Input
+                  id={field.key}
+                  className="mt-1.5"
+                  type={field.type}
+                  value={credentials[field.key] || ""}
+                  onChange={(e) =>
+                    setCredentials({ ...credentials, [field.key]: e.target.value })
+                  }
+                  placeholder={field.placeholder}
+                />
+              )}
             </div>
           ))}
           {error && (
@@ -522,15 +536,17 @@ function ConnectedRow({
 
 export default function PlatformsPage() {
   const { data: connections, loading, refetch } = useApi<PlatformConnection[]>("/platforms");
+  const { data: sfStatus } = useApi<{ has_connection: boolean }>("/connections/status");
   const [search, setSearch] = useState("");
   const [activeConnector, setActiveConnector] = useState<ConnectorDef | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
 
-  const connectedKeys = useMemo(
-    () => new Set((connections ?? []).map((c) => c.platform)),
-    [connections]
-  );
+  const connectedKeys = useMemo(() => {
+    const keys = new Set((connections ?? []).map((c) => c.platform));
+    if (sfStatus?.has_connection) keys.add("snowflake");
+    return keys;
+  }, [connections, sfStatus]);
 
   const connectedCount = connectedKeys.size;
 

@@ -74,6 +74,10 @@ async def create_indexes():
         [("user_id", ASCENDING), ("date", ASCENDING)], unique=True
     )
 
+    # Users indexes
+    await db.users.create_index([("email", ASCENDING)], unique=True)
+    await db.users.create_index([("user_id", ASCENDING)], unique=True)
+
     # Team indexes
     await db.teams.create_index([("owner_id", ASCENDING)])
     await db.teams.create_index([("members.email", ASCENDING)])

@@ -364,11 +364,11 @@ def _get_llm_client():
     """Get the LLM client based on configured provider."""
     provider = settings.llm_provider
     if provider == "openai":
-        from openai import OpenAI
-        return "openai", OpenAI(api_key=settings.llm_api_key)
+        from openai import AsyncOpenAI
+        return "openai", AsyncOpenAI(api_key=settings.llm_api_key)
     else:
         import anthropic
-        return "anthropic", anthropic.Anthropic(api_key=settings.llm_api_key)
+        return "anthropic", anthropic.AsyncAnthropic(api_key=settings.llm_api_key)
 
 
 async def run_agent(messages: list[dict], source, credit_price: float, user_id: str = None) -> str:
@@ -385,7 +385,7 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
     accumulated_text = []
 
     for _iteration in range(max_iterations):
-        response = client.messages.create(
+        response = await client.messages.create(
             model=settings.llm_model,
             max_tokens=4096,
             system=system_prompt,
@@ -456,7 +456,7 @@ async def run_agent_stream(messages: list[dict], source, credit_price: float, us
         collected_content = []
         stop_reason = None
 
-        with client.messages.stream(
+        async with client.messages.stream(
             model=settings.llm_model,
             max_tokens=4096,
             system=system_prompt,
@@ -466,7 +466,7 @@ async def run_agent_stream(messages: list[dict], source, credit_price: float, us
             current_block_type = None
             current_tool_name = None
 
-            for event in stream:
+            async for event in stream:
                 if event.type == "content_block_start":
                     if event.content_block.type == "text":
                         current_block_type = "text"

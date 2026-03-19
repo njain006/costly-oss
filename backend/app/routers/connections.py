@@ -17,10 +17,14 @@ router = APIRouter(prefix="/api/connections", tags=["connections"])
 
 @router.get("/status")
 async def connection_status(user_id: str = Depends(get_current_user)):
+    # Check both unified and legacy systems
     conn = await db.snowflake_connections.find_one({"user_id": user_id, "is_active": True})
+    pc = await db.platform_connections.find_one({"user_id": user_id, "platform": "snowflake"})
+    has = conn is not None or pc is not None
+    conn_id = conn["connection_id"] if conn else (str(pc["_id"]) if pc else None)
     return {
-        "has_connection": conn is not None,
-        "active_connection": conn["connection_id"] if conn else None,
+        "has_connection": has,
+        "active_connection": conn_id,
     }
 
 

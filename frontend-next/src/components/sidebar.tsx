@@ -37,7 +37,10 @@ export default function Sidebar() {
   const { data: connections } = useApi<{ id: string; platform?: string }[]>(
     !isDemo && user ? "/platforms" : null
   );
-  const showOnboarding = !isDemo && user && (!connections || connections.length === 0);
+  const { data: sfStatus } = useApi<{ has_connection: boolean }>(
+    !isDemo && user ? "/connections/status" : null
+  );
+  const showOnboarding = !isDemo && user && (!connections || connections.length === 0) && !sfStatus?.has_connection;
 
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["snowflake"]));
 
@@ -55,6 +58,7 @@ export default function Sidebar() {
     const connectedPlatforms = new Set(
       (connections ?? []).map((c) => c.platform).filter(Boolean)
     );
+    if (sfStatus?.has_connection) connectedPlatforms.add("snowflake");
 
     const result: SidebarSection[] = [];
 
@@ -77,7 +81,7 @@ export default function Sidebar() {
     }
 
     return result;
-  }, [connections, isDemo]);
+  }, [connections, sfStatus, isDemo]);
 
   const handleLogout = () => {
     if (isDemo) {
@@ -160,6 +164,7 @@ export default function Sidebar() {
           Overview
         </div>
         {navLink("/overview", "All Platforms", Globe)}
+        {navLink("/ai-costs", "AI Costs", Sparkles)}
         {navLink("/recommendations", "Recommendations", Lightbulb)}
         {navLink("/alerts", "Alerts", Bell)}
 

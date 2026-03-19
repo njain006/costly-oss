@@ -11,6 +11,7 @@ An open-source, AI-powered cost intelligence platform for data teams. Connect 15
 - **Anomaly detection** — automatic spike detection with Z-score, day-over-day, and week-over-week analysis
 - **Optimization recommendations** — actionable insights with projected dollar savings
 - **Custom pricing** — plug in your negotiated rates (Snowflake credits, AWS EDP, per-model AI pricing)
+- **AI Spend Intelligence** — cross-provider AI cost dashboard (OpenAI vs Anthropic vs Gemini) with token breakdowns, model-level costs, and migration recommendations
 - **Per-platform deep dives** — warehouse sizing, query patterns, storage analysis, cost attribution
 
 ## Supported Platforms
@@ -69,7 +70,9 @@ An open-source, AI-powered cost intelligence platform for data teams. Connect 15
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/costlyai/costly.git
+git clone https://github.com/njain006/costly-oss.git
+cd costly-oss  # rename if you prefer
+# or: git clone https://github.com/njain006/costly-oss.git costly
 cd costly
 
 # Copy example env and fill in your values
