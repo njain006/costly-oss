@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" font-family="Inter, system-ui, sans-serif">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#6366f1"/></marker>
+    <marker id="arrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#10b981"/></marker>
+    <marker id="arrA" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f59e0b"/></marker>
+  </defs>
+
+  <rect width="900" height="480" rx="12" fill="url(#bg2)"/>
+  <text x="450" y="35" text-anchor="middle" fill="#e2e8f0" font-size="18" font-weight="700">Data Flow: Connect → Sync → Analyze</text>
+
+  <!-- Step 1: Connect -->
+  <rect x="30" y="60" width="250" height="180" rx="10" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="155" y="85" text-anchor="middle" fill="#a5b4fc" font-size="13" font-weight="700">1. CONNECT</text>
+
+  <text x="50" y="110" fill="#94a3b8" font-size="10">User enters credentials:</text>
+  <text x="50" y="130" fill="#c7d2fe" font-size="10" font-weight="600">Snowflake: RSA private key</text>
+  <text x="50" y="147" fill="#c7d2fe" font-size="10" font-weight="600">AWS: IAM access key + secret</text>
+  <text x="50" y="164" fill="#c7d2fe" font-size="10" font-weight="600">dbt Cloud: API token + account ID</text>
+  <text x="50" y="181" fill="#c7d2fe" font-size="10" font-weight="600">OpenAI: API key</text>
+  <text x="50" y="198" fill="#c7d2fe" font-size="10" font-weight="600">Fivetran: API key + secret</text>
+
+  <text x="50" y="225" fill="#67e8f9" font-size="9">Encrypted with Fernet → stored in MongoDB</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="280" y1="150" x2="330" y2="150" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Step 2: Sync -->
+  <rect x="330" y="60" width="250" height="180" rx="10" fill="#1a2e1a" stroke="#10b981" stroke-width="1.5"/>
+  <text x="455" y="85" text-anchor="middle" fill="#86efac" font-size="13" font-weight="700">2. SYNC (every 6h)</text>
+
+  <text x="350" y="110" fill="#94a3b8" font-size="10">Connector fetches from API:</text>
+  <text x="350" y="130" fill="#6ee7b7" font-size="10" font-weight="600">→ Snowflake ACCOUNT_USAGE views</text>
+  <text x="350" y="147" fill="#6ee7b7" font-size="10" font-weight="600">→ AWS Cost Explorer + CloudWatch</text>
+  <text x="350" y="164" fill="#6ee7b7" font-size="10" font-weight="600">→ dbt /api/v2/runs (job history)</text>
+  <text x="350" y="181" fill="#6ee7b7" font-size="10" font-weight="600">→ OpenAI /organization/usage</text>
+  <text x="350" y="198" fill="#6ee7b7" font-size="10" font-weight="600">→ Fivetran /usage/connectors</text>
+
+  <text x="350" y="225" fill="#67e8f9" font-size="9">Normalized to UnifiedCost → upserted to MongoDB</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="580" y1="150" x2="630" y2="150" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrG)"/>
+
+  <!-- Step 3: Analyze -->
+  <rect x="630" y="60" width="250" height="180" rx="10" fill="#2a1f1a" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="755" y="85" text-anchor="middle" fill="#fcd34d" font-size="13" font-weight="700">3. ANALYZE</text>
+
+  <text x="650" y="110" fill="#94a3b8" font-size="10">Dashboard shows:</text>
+  <text x="650" y="130" fill="#fde68a" font-size="10" font-weight="600">Total spend across all platforms</text>
+  <text x="650" y="147" fill="#fde68a" font-size="10" font-weight="600">Cost trends + anomaly detection</text>
+  <text x="650" y="164" fill="#fde68a" font-size="10" font-weight="600">Per-platform deep dives</text>
+  <text x="650" y="181" fill="#fde68a" font-size="10" font-weight="600">AI agent answers questions</text>
+  <text x="650" y="198" fill="#fde68a" font-size="10" font-weight="600">Optimization recommendations</text>
+
+  <text x="650" y="225" fill="#67e8f9" font-size="9">AI Spend Intelligence (cross-provider)</text>
+
+  <!-- UnifiedCost model -->
+  <rect x="150" y="280" width="600" height="90" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="450" y="305" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="700">UnifiedCost Data Model</text>
+
+  <text x="170" y="330" fill="#94a3b8" font-size="10" font-weight="600">date</text>
+  <text x="230" y="330" fill="#94a3b8" font-size="10" font-weight="600">platform</text>
+  <text x="310" y="330" fill="#94a3b8" font-size="10" font-weight="600">service</text>
+  <text x="380" y="330" fill="#94a3b8" font-size="10" font-weight="600">resource</text>
+  <text x="460" y="330" fill="#94a3b8" font-size="10" font-weight="600">category</text>
+  <text x="545" y="330" fill="#fcd34d" font-size="10" font-weight="700">cost_usd</text>
+  <text x="620" y="330" fill="#94a3b8" font-size="10" font-weight="600">usage_qty</text>
+  <text x="700" y="330" fill="#94a3b8" font-size="10" font-weight="600">metadata</text>
+
+  <text x="170" y="355" fill="#64748b" font-size="9">2026-03-18</text>
+  <text x="230" y="355" fill="#64748b" font-size="9">snowflake</text>
+  <text x="310" y="355" fill="#64748b" font-size="9">sf_compute</text>
+  <text x="380" y="355" fill="#64748b" font-size="9">COMPUTE_WH</text>
+  <text x="460" y="355" fill="#64748b" font-size="9">compute</text>
+  <text x="545" y="355" fill="#fcd34d" font-size="9">$12.50</text>
+  <text x="620" y="355" fill="#64748b" font-size="9">5.0 credits</text>
+  <text x="700" y="355" fill="#64748b" font-size="9">{warehouse}</text>
+
+  <!-- Permissions box -->
+  <rect x="50" y="400" width="800" height="65" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <text x="450" y="422" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700" letter-spacing="2">REQUIRED PERMISSIONS (all read-only)</text>
+
+  <text x="70" y="448" fill="#7dd3fc" font-size="9" font-weight="600">Snowflake: IMPORTED PRIVILEGES on SNOWFLAKE db</text>
+  <text x="300" y="448" fill="#fcd34d" font-size="9" font-weight="600">AWS: ce:GetCostAndUsage, s3:ListBuckets</text>
+  <text x="570" y="448" fill="#6ee7b7" font-size="9" font-weight="600">dbt: Admin API token (read-only)</text>
+  <text x="300" y="462" fill="#86efac" font-size="9" font-weight="600">OpenAI: Org admin API key</text>
+  <text x="570" y="462" fill="#fca5a5" font-size="9" font-weight="600">Fivetran: Read-only API key + secret</text>
+</svg>

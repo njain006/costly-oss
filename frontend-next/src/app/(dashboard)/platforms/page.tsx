@@ -152,8 +152,8 @@ const CONNECTORS: ConnectorDef[] = [
     accentColor: "bg-violet-50 border-violet-100",
     badgeColor: "bg-violet-100 text-violet-700",
     fields: [
-      { key: "api_key", label: "API Key / Token", type: "password", placeholder: "API key" },
-      { key: "workspace_id", label: "Workspace ID (optional)", type: "text", placeholder: "Workspace ID" },
+      { key: "api_token", label: "API Token", type: "password", placeholder: "API key" },
+      { key: "host", label: "Host URL", type: "text", placeholder: "https://cloud.airbyte.com" },
     ],
   },
   // AI & ML
@@ -193,6 +193,7 @@ const CONNECTORS: ConnectorDef[] = [
     fields: [
       { key: "api_key", label: "API Key", type: "password", placeholder: "AIza..." },
       { key: "project_id", label: "GCP Project ID (for Vertex)", type: "text", placeholder: "my-project" },
+      { key: "service_account_json", label: "Service Account JSON (optional, for Vertex AI)", type: "textarea", placeholder: '{"type": "service_account", ...}' },
     ],
   },
   // BI & Analytics
@@ -205,7 +206,7 @@ const CONNECTORS: ConnectorDef[] = [
     accentColor: "bg-indigo-50 border-indigo-100",
     badgeColor: "bg-indigo-100 text-indigo-700",
     fields: [
-      { key: "base_url", label: "Base URL", type: "text", placeholder: "https://company.looker.com" },
+      { key: "instance_url", label: "Base URL", type: "text", placeholder: "https://company.looker.com" },
       { key: "client_id", label: "Client ID", type: "text", placeholder: "Client ID" },
       { key: "client_secret", label: "Client Secret", type: "password", placeholder: "Client secret" },
     ],
@@ -221,7 +222,7 @@ const CONNECTORS: ConnectorDef[] = [
     fields: [
       { key: "server_url", label: "Server URL", type: "text", placeholder: "https://tableau.company.com" },
       { key: "token_name", label: "Personal Access Token Name", type: "text", placeholder: "Token name" },
-      { key: "token_value", label: "Personal Access Token Value", type: "password", placeholder: "Token value" },
+      { key: "token_secret", label: "Token Secret", type: "password", placeholder: "Token value" },
     ],
   },
   {
@@ -234,7 +235,7 @@ const CONNECTORS: ConnectorDef[] = [
     badgeColor: "bg-blue-100 text-blue-700",
     fields: [
       { key: "api_key", label: "API Key", type: "password", placeholder: "API key" },
-      { key: "org_id", label: "Organization ID", type: "text", placeholder: "org-..." },
+      { key: "instance_url", label: "Instance URL", type: "text", placeholder: "https://your-org.omniapp.co" },
     ],
   },
   // CI/CD & DevOps
@@ -261,7 +262,8 @@ const CONNECTORS: ConnectorDef[] = [
     badgeColor: "bg-orange-100 text-orange-700",
     fields: [
       { key: "token", label: "Personal Access Token", type: "password", placeholder: "glpat-..." },
-      { key: "namespace", label: "Group / Namespace (optional)", type: "text", placeholder: "my-group" },
+      { key: "group_id", label: "Group ID", type: "text", placeholder: "12345" },
+      { key: "instance_url", label: "Instance URL (optional)", type: "text", placeholder: "https://gitlab.com" },
     ],
   },
   // Data Quality
@@ -275,7 +277,7 @@ const CONNECTORS: ConnectorDef[] = [
     badgeColor: "bg-teal-100 text-teal-700",
     fields: [
       { key: "api_key_id", label: "API Key ID", type: "text", placeholder: "Key ID" },
-      { key: "api_key_token", label: "API Key Token", type: "password", placeholder: "Token" },
+      { key: "api_token", label: "API Token", type: "password", placeholder: "Token" },
     ],
   },
 ];

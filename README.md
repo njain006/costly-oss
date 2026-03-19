@@ -28,24 +28,32 @@ An open-source, AI-powered cost intelligence platform for data teams. Connect 15
 
 ## Architecture
 
-```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Next.js 15  │────▶│  FastAPI      │────▶│  MongoDB 7   │
-│  Frontend    │     │  Backend      │     │              │
-└─────────────┘     └──────┬───────┘     └──────────────┘
-                           │
-                    ┌──────┴───────┐     ┌──────────────┐
-                    │  AI Agent    │     │  Redis 7     │
-                    │  (15+ tools) │     │  (cache)     │
-                    └──────┬───────┘     └──────────────┘
-                           │
-         ┌─────────────────┼─────────────────┐
-         │                 │                 │
-    Snowflake            AWS           dbt Cloud
-    BigQuery          Anthropic         OpenAI
-    Databricks        Fivetran          GitHub
-         ...              ...              ...
-```
+![Architecture Diagram](docs/architecture.svg)
+
+![Data Flow](docs/data-flow.svg)
+
+## Connector Permissions
+
+Every connector uses **read-only** access. Here's exactly what each one needs:
+
+| Platform | Credential Type | Permissions Required | What It Reads |
+|----------|----------------|---------------------|---------------|
+| **Snowflake** | RSA key-pair | `IMPORTED PRIVILEGES` on `SNOWFLAKE` database | Warehouse credits, query history, storage, load history |
+| **AWS** | IAM access key | `ce:GetCostAndUsage`, `s3:ListBuckets`, `ec2:DescribeInstances`, `lambda:ListFunctions` | Cost Explorer (21 services), S3/EC2/Lambda inventory |
+| **dbt Cloud** | API token (Admin) | Read access to runs, jobs | Job runs, durations, model counts per run |
+| **OpenAI** | API key (Org admin) | Organization usage read | Token usage by model, daily costs |
+| **Anthropic** | Admin API key | Organization usage read | Token usage by model (input/output), daily costs |
+| **Fivetran** | API key + secret | Read access to groups, connectors | MAR (monthly active rows), sync frequency, connector costs |
+| **BigQuery** | Service account JSON | `bigquery.jobs.list`, `bigquery.tables.list` | Bytes scanned, slot usage, storage by dataset |
+| **Databricks** | Personal access token | Account-level billing read | DBU usage by SKU (SQL, DLT, interactive, ML) |
+| **Gemini** | API key or service account | AI Studio / Cloud Monitoring read | Request counts, model usage |
+| **Looker** | Client ID + secret | Admin API read | Query counts, PDT builds, user activity |
+| **Tableau** | PAT name + secret | Site admin read | User seats, view counts, extract refreshes |
+| **GitHub Actions** | PAT (classic) | `repo`, `read:org` | Workflow minutes by OS, repo, runner type |
+| **GitLab CI** | PAT | `read_api` | Pipeline durations, job counts per project |
+| **Airbyte** | API token | Read access | Sync volumes (bytes/rows), connection durations |
+| **Monte Carlo** | API key + ID | GraphQL read | Tables monitored, incidents, data quality metrics |
+| **Omni** | API key | Read access | User counts, query volumes |
 
 ## Tech Stack
 
