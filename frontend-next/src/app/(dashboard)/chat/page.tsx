@@ -7,13 +7,27 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { Bot, Send, User, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  expert?: string | null;
+  expert_name?: string | null;
 }
+
+const EXPERT_COLORS: Record<string, string> = {
+  snowflake: "bg-sky-100 text-sky-700 border-sky-200",
+  aws: "bg-orange-100 text-orange-700 border-orange-200",
+  databricks: "bg-red-100 text-red-700 border-red-200",
+  openai: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  anthropic: "bg-amber-100 text-amber-700 border-amber-200",
+  dbt_cloud: "bg-orange-100 text-orange-700 border-orange-200",
+  gemini: "bg-blue-100 text-blue-700 border-blue-200",
+  gcp: "bg-blue-100 text-blue-700 border-blue-200",
+};
 
 const SUGGESTIONS = [
   "Why did our costs increase this month?",
@@ -46,10 +60,15 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
-      const res: { response: string; demo: boolean } = await api.post("/chat", {
+      const res: { response: string; demo: boolean; expert?: string; expert_name?: string } = await api.post("/chat", {
         messages: newMessages,
       });
-      setMessages([...newMessages, { role: "assistant", content: res.response }]);
+      setMessages([...newMessages, {
+        role: "assistant",
+        content: res.response,
+        expert: res.expert,
+        expert_name: res.expert_name,
+      }]);
     } catch (err) {
       setMessages([
         ...newMessages,
@@ -124,6 +143,14 @@ export default function ChatPage() {
                   : "bg-white border-slate-200"
               }`}
             >
+              {msg.role === "assistant" && msg.expert_name && (
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] font-medium mb-2 ${EXPERT_COLORS[msg.expert || ""] || "bg-slate-100 text-slate-600 border-slate-200"}`}
+                >
+                  {msg.expert_name}
+                </Badge>
+              )}
               <div
                 className={`text-sm leading-relaxed ${
                   msg.role === "assistant" ? "text-slate-700 prose prose-sm prose-slate max-w-none" : "whitespace-pre-wrap"

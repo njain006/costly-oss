@@ -47,10 +47,10 @@ export default function LoginPage() {
       if (!connections || connections.length === 0) {
         router.push("/onboarding");
       } else {
-        router.push("/dashboard");
+        router.push("/overview");
       }
     } catch {
-      router.push("/dashboard");
+      router.push("/overview");
     }
   };
 
@@ -140,15 +140,15 @@ export default function LoginPage() {
     <div className="min-h-screen flex">
       {/* Left panel — branding */}
       <div className="hidden lg:flex lg:w-[480px] bg-[#0B1929] relative overflow-hidden flex-col justify-between p-10">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-sky-600/10 blur-[100px] rounded-full pointer-events-none" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-600/10 blur-[100px] rounded-full pointer-events-none" />
         <div className="relative">
           <Link href="/" className="flex items-center gap-2 text-white font-extrabold text-xl tracking-tight mb-12">
-            <DollarSign className="h-6 w-6 text-sky-400" />
+            <DollarSign className="h-6 w-6 text-indigo-400" />
             costly
           </Link>
           <h2 className="text-3xl font-extrabold text-white tracking-tight leading-tight mb-4">
             See every dollar your<br />
-            <span className="bg-gradient-to-r from-sky-400 to-cyan-400 bg-clip-text text-transparent">data stack costs</span>
+            <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-purple-400 bg-clip-text text-transparent">data stack costs</span>
           </h2>
           <p className="text-slate-400 leading-relaxed mb-10">
             Connect 15+ platforms in minutes. Get unified cost intelligence across warehouses, pipelines, BI, AI, and CI/CD.
@@ -160,8 +160,8 @@ export default function LoginPage() {
               { icon: Sparkles, text: "Smart recommendations with projected savings" },
             ].map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center shrink-0">
-                  <Icon className="h-4 w-4 text-sky-400" />
+                <div className="h-8 w-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                  <Icon className="h-4 w-4 text-indigo-400" />
                 </div>
                 <span className="text-sm text-slate-300">{text}</span>
               </div>
@@ -179,7 +179,7 @@ export default function LoginPage() {
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
             <Link href="/" className="flex items-center gap-2 text-slate-900 font-extrabold text-xl tracking-tight">
-              <DollarSign className="h-6 w-6 text-sky-500" />
+              <DollarSign className="h-6 w-6 text-indigo-500" />
               costly
             </Link>
           </div>
@@ -223,7 +223,7 @@ export default function LoginPage() {
                 className="mt-1.5 h-11"
               />
             </div>
-            <Button type="submit" className="w-full h-11 bg-sky-600 hover:bg-sky-700" disabled={loading}>
+            <Button type="submit" className="w-full h-11 bg-indigo-600 hover:bg-indigo-700" disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Send Reset Link
             </Button>
@@ -295,13 +295,13 @@ export default function LoginPage() {
                 className="mt-1.5 h-11"
               />
             </div>
-            <Button type="submit" className="w-full h-11 bg-sky-600 hover:bg-sky-700" disabled={loading}>
+            <Button type="submit" className="w-full h-11 bg-indigo-600 hover:bg-indigo-700" disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Sign In
             </Button>
             <button
               type="button"
-              className="w-full text-center text-sm text-slate-500 hover:text-sky-600 transition"
+              className="w-full text-center text-sm text-slate-500 hover:text-indigo-600 transition"
               onClick={() => setShowForgot(true)}
             >
               Forgot password?
@@ -347,7 +347,7 @@ export default function LoginPage() {
                 className="mt-1.5 h-11"
               />
             </div>
-            <Button type="submit" className="w-full h-11 bg-sky-600 hover:bg-sky-700" disabled={loading}>
+            <Button type="submit" className="w-full h-11 bg-indigo-600 hover:bg-indigo-700" disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Create Account
             </Button>

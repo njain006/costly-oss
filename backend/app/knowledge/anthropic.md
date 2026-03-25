@@ -48,3 +48,44 @@ Token-based billing. Input/output priced separately. Extended thinking tokens bi
 - Granularity: daily
 - Group by: model
 - Regular API keys cannot access usage data
+
+## Extended Thinking Deep Dive
+- Thinking tokens are billed as OUTPUT tokens at full rate
+- Opus thinking at $75/1M output tokens can be very expensive
+- A complex reasoning task might generate 10,000 thinking tokens = $0.75 per request on Opus
+- **Budget control:** Use `budget_tokens` parameter to cap thinking
+  - `budget_tokens: 5000` limits to 5K thinking tokens max
+  - Minimum: 1,024 tokens
+- **Streaming:** Thinking tokens are streamed in `thinking` content blocks — monitor in real-time
+
+## Token Counting
+- Use `/v1/messages/count_tokens` endpoint to estimate costs before sending
+- System prompts, tools, and conversation history all count as input tokens
+- Tool use results count as input tokens in the next turn
+
+## Message Batches API
+- 50% discount on both input and output tokens
+- Results available within 24 hours (often faster)
+- Max 100,000 requests per batch
+- Separate rate limits from real-time API
+- **Best for:** Evaluation runs, data processing, bulk classification
+
+## Prompt Caching Economics
+Calculate breakeven:
+```
+cache_write_cost = tokens * input_price * 1.25  (25% premium)
+cache_read_cost = tokens * input_price * 0.10   (90% discount)
+regular_cost = tokens * input_price * 1.00
+
+breakeven_queries = cache_write_cost / (regular_cost - cache_read_cost)
+                  = 1.25 / (1.0 - 0.1) = 1.39 → 2 queries
+```
+**Rule of thumb:** If you'll send the same context 2+ times in 5 minutes, use caching.
+
+## Model Comparison for Cost Routing
+| Task Type | Recommended Model | Why |
+|-----------|------------------|-----|
+| Classification, extraction | Haiku 3.5 ($0.80/$4.00) | 90% cheaper than Sonnet, sufficient for structured tasks |
+| General coding, writing | Sonnet 4 ($3.00/$15.00) | Best balance of quality and cost |
+| Complex reasoning, research | Opus 4 ($15.00/$75.00) | Only when Sonnet quality is insufficient |
+| High-volume processing | Haiku 3.5 + Batch ($0.40/$2.00) | Batch + cheapest model = minimum cost |

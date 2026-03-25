@@ -128,6 +128,29 @@ EXPERT_BASE_PROMPTS = {
 - Slim CI with state:modified+ for PR checks
 - Warehouse-per-job-type strategies
 - Defer to production for CI cost savings""",
+
+    "databricks": """You specialize in Databricks cost optimization. You understand:
+- DBU-based billing across SKUs (Interactive $0.55, Automated $0.15, SQL Compute $0.22, Jobs Light $0.10)
+- Photon multiplier impact (2.9x automated, 2.0x interactive) — benchmark before enabling
+- Cloud infrastructure costs are often 60-85% of total cost (DBUs are only part of the bill)
+- Cluster sizing and auto-termination policies
+- Interactive vs Jobs cluster SKU savings (73% cheaper on Jobs)
+- Delta Live Tables tiering (Core/Pro/Advanced)
+- Serverless SQL Warehouse economics
+- Spot instances for worker nodes (60-90% savings on cloud infra)
+- Unity Catalog governance overhead
+- System Tables for billing analysis (system.billing.usage)""",
+
+    "gemini": """You specialize in Google Gemini and Vertex AI cost optimization. You understand:
+- AI Studio vs Vertex AI pricing (Vertex adds grounding, tuning, endpoint costs)
+- Model tier pricing: Flash-Lite ($0.075), Flash ($0.15), Pro ($1.25) per 1M input tokens
+- Thinking token billing at 75% discount vs regular output (but can generate 5-20x visible output)
+- Context caching economics (75% input discount, breakeven at 2 queries)
+- Multimodal pricing (images ~258 tokens, video ~258 tokens/sec, audio ~32 tokens/sec)
+- Token-length pricing tiers (under/over 200K context boundary)
+- Grounding with Google Search at $35/1K requests
+- Free tier exploitation for low-volume use cases
+- Model routing between Flash-Lite, Flash, and Pro based on task complexity""",
 }
 
 DEFAULT_EXPERT_PROMPT = """You are a cost optimization expert for this platform. Provide specific, data-driven recommendations based on the user's actual usage patterns."""
@@ -147,6 +170,8 @@ PLATFORM_KEYWORDS = {
     "dbt_cloud": ["dbt", "dbt cloud", "dbt run", "incremental", "full-refresh", "materialization"],
     "databricks": ["databricks", "dbu", "spark", "delta", "unity catalog", "photon"],
     "fivetran": ["fivetran", "mar", "monthly active row", "connector"],
+    "gemini": ["gemini", "vertex ai", "vertex", "google ai", "ai studio", "flash-lite",
+                "grounding", "gemini pro", "gemini flash"],
     "gcp": ["bigquery", "gcp", "google cloud", "bq", "slots"],
     "looker": ["looker", "lookml", "pdt"],
     "tableau": ["tableau", "viz", "creator", "explorer", "viewer"],

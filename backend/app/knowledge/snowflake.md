@@ -349,3 +349,75 @@ ORDER BY CREDITS_USED DESC;
 SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_ANALYST_USAGE_HISTORY
 WHERE START_TIME >= DATEADD('day', -30, CURRENT_TIMESTAMP());
 ```
+
+## Per-Query Cost Attribution (from SELECT/dbt-snowflake-monitoring)
+
+### How Snowflake Allocates Compute Cost to Queries
+
+The industry-standard method (used by SELECT.dev's open-source dbt package):
+
+1. **Time-slice queries into hourly buckets** — each query gets 1 row per hour it ran in
+2. **Calculate each query's fraction of warehouse time per hour:**
+   ```
+   fraction = query_execution_milliseconds_in_hour / total_warehouse_execution_milliseconds_in_hour
+   ```
+3. **Allocate credits proportionally:**
+   ```
+   query_compute_credits = warehouse_hourly_credits * fraction
+   query_compute_cost = query_compute_credits * daily_effective_rate
+   ```
+
+**Critical detail:** Only execution time counts — queue time, compilation time, and provisioning time are excluded. The execution_start_time is calculated by adding all overhead times to start_time.
+
+### Cloud Services Cost per Query
+```
+daily_billable_cloud_services = greatest(cloud_services_credits - compute_credits * 0.1, 0)
+query_cloud_services_cost = (query_cs_credits / daily_cs_credits) * daily_billable_cloud_services * effective_rate
+```
+
+### Overage Rate Handling
+When prepaid capacity is exhausted (remaining_balance < 0 in ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY), overage rates from RATE_SHEET_DAILY kick in automatically. The rate can jump 50-100% — monitor remaining balance proactively.
+
+### Rate Sheet Gaps
+RATE_SHEET_DAILY does NOT have a row for every day — days with zero consumption have no record. Fill gaps using previous day's rate when calculating historical costs.
+
+### Snowpark-Optimized Warehouses
+Cost 1.5x standard credits at every size:
+| Size | Standard Credits/Hr | Snowpark Credits/Hr |
+|------|-------------------|-------------------|
+| Medium | 4 | 6 |
+| Large | 8 | 12 |
+| X-Large | 16 | 24 |
+| 2XL | 32 | 48 |
+
+### Storage Cost Calculation
+Storage is billed monthly per TB but accrues hourly:
+```
+hourly_storage_cost = storage_terabytes / (days_in_month * 24) * monthly_rate_per_TB
+```
+
+**Clone storage gotcha:** Itemized database storage (from DATABASE_STORAGE_USAGE_HISTORY) does NOT sum to total storage (from STORAGE_USAGE). The delta is "Retained for Clones" — storage from deleted objects retained because cloned tables still reference them.
+
+### Service Name Inconsistency (Watch Out)
+Snowflake uses different names for the same service across views:
+- `AUTO_CLUSTERING` (in METERING_HISTORY) vs `AUTOMATIC_CLUSTERING` (in AUTOMATIC_CLUSTERING_HISTORY)
+- `PIPE` (in METERING_HISTORY) vs `SNOWPIPE` (in PIPE_USAGE_HISTORY)
+Always normalize service names when joining across views.
+
+### Incomplete Day Edge Case
+The cloud services 10% adjustment for the current (incomplete) day may be inaccurate because the full day's compute total is unknown. Historical data is accurate; today's data is approximate.
+
+## Optimization Rules with Dollar Estimates
+
+### Right-Sizing Formula (from OptScale)
+```
+recommended_size = ceil(current_credits_per_hour / utilization_limit * observed_p99_utilization)
+monthly_saving = (current_credits_per_hour - recommended_credits_per_hour) * active_hours_per_month * credit_price
+```
+Where utilization_limit defaults to 80% (the threshold above which the warehouse is considered appropriately sized).
+
+### Auto-Suspend Waste Estimate
+```
+wasted_credits_per_day = (auto_suspend_seconds - optimal_auto_suspend_seconds) / 3600 * credits_per_hour * resumes_per_day
+optimal_auto_suspend = p90_inter_query_gap_seconds (minimum 60 seconds)
+```

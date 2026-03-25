@@ -240,15 +240,21 @@ Guidelines:
 - Use tables for comparisons when helpful"""
 
 
-def _build_system_prompt(messages: list[dict]) -> str:
-    """Build system prompt, routing to platform expert when relevant."""
-    from app.services.expert_agents import get_expert_for_message, get_expert_system_prompt
+def _build_system_prompt(messages: list[dict]) -> tuple[str, str | None, str | None]:
+    """Build system prompt, routing to platform expert when relevant.
+
+    Returns (system_prompt, expert_platform, expert_name).
+    """
+    from app.services.expert_agents import (
+        get_expert_for_message, get_expert_system_prompt, EXPERT_NAMES,
+    )
 
     platform = get_expert_for_message(messages)
     if platform:
         expert_prompt = get_expert_system_prompt(platform)
-        return f"{BASE_SYSTEM_PROMPT}\n\n{expert_prompt}"
-    return BASE_SYSTEM_PROMPT
+        expert_name = EXPERT_NAMES.get(platform)
+        return f"{BASE_SYSTEM_PROMPT}\n\n{expert_prompt}", platform, expert_name
+    return BASE_SYSTEM_PROMPT, None, None
 
 
 def _truncate(data, max_items: int = 30):
@@ -371,8 +377,11 @@ def _get_llm_client():
         return "anthropic", anthropic.AsyncAnthropic(api_key=settings.llm_api_key)
 
 
-async def run_agent(messages: list[dict], source, credit_price: float, user_id: str = None) -> str:
-    """Run the Costly AI agent with tool use in a loop until a final text response."""
+async def run_agent(messages: list[dict], source, credit_price: float, user_id: str = None) -> dict:
+    """Run the Costly AI agent with tool use in a loop until a final text response.
+
+    Returns dict with keys: response, expert, expert_name.
+    """
     provider, client = _get_llm_client()
 
     max_iterations = 10
@@ -381,7 +390,7 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
     for msg in messages:
         api_messages.append({"role": msg["role"], "content": msg["content"]})
 
-    system_prompt = _build_system_prompt(messages)
+    system_prompt, expert_platform, expert_name = _build_system_prompt(messages)
     accumulated_text = []
 
     for _iteration in range(max_iterations):
@@ -399,7 +408,11 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
             accumulated_text.extend(text_parts)
 
         if response.stop_reason == "end_turn":
-            return "\n".join(accumulated_text)
+            return {
+                "response": "\n".join(accumulated_text),
+                "expert": expert_platform,
+                "expert_name": expert_name,
+            }
 
         # Process tool uses
         tool_results = []
@@ -416,7 +429,11 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
                 })
 
         if not tool_results:
-            return "\n".join(accumulated_text) if accumulated_text else "I wasn't able to process that request."
+            return {
+                "response": "\n".join(accumulated_text) if accumulated_text else "I wasn't able to process that request.",
+                "expert": expert_platform,
+                "expert_name": expert_name,
+            }
 
         # Append assistant response and tool results, then loop
         api_messages.append({"role": "assistant", "content": response.content})
@@ -424,9 +441,9 @@ async def run_agent(messages: list[dict], source, credit_price: float, user_id: 
 
     # Reached max iterations
     limit_msg = "I've reached my analysis limit. Here's what I found so far:"
-    if accumulated_text:
-        return f"{limit_msg}\n\n" + "\n".join(accumulated_text)
-    return f"{limit_msg}\n\nI was unable to complete the analysis within the allowed number of steps. Please try a more specific question."
+    text = f"{limit_msg}\n\n" + "\n".join(accumulated_text) if accumulated_text else \
+        f"{limit_msg}\n\nI was unable to complete the analysis within the allowed number of steps. Please try a more specific question."
+    return {"response": text, "expert": expert_platform, "expert_name": expert_name}
 
 
 async def run_agent_stream(messages: list[dict], source, credit_price: float, user_id: str = None):
@@ -440,7 +457,9 @@ async def run_agent_stream(messages: list[dict], source, credit_price: float, us
     if provider != "anthropic":
         # Fallback: run non-streaming and yield the full response
         result = await run_agent(messages, source, credit_price, user_id=user_id)
-        yield {"type": "text", "content": result}
+        if result.get("expert"):
+            yield {"type": "expert", "expert": result["expert"], "expert_name": result["expert_name"]}
+        yield {"type": "text", "content": result["response"]}
         return
 
     max_iterations = 10
@@ -449,7 +468,11 @@ async def run_agent_stream(messages: list[dict], source, credit_price: float, us
     for msg in messages:
         api_messages.append({"role": msg["role"], "content": msg["content"]})
 
-    system_prompt = _build_system_prompt(messages)
+    system_prompt, expert_platform, expert_name = _build_system_prompt(messages)
+
+    # Emit expert metadata as first event so frontend can show badge immediately
+    if expert_platform:
+        yield {"type": "expert", "expert": expert_platform, "expert_name": expert_name}
 
     for _iteration in range(max_iterations):
         # Use Anthropic streaming API

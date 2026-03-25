@@ -770,3 +770,77 @@ response = pricing.get_products(
 - Tax calculated on post-discount amount
 - Support costs: percentage of monthly AWS bill (Developer 3%, Business 10%+, Enterprise 7%+)
 - Data transfer aggregated across all services before tiering kicks in
+
+## Waste Detection Rules (from steampipe-mod-aws-thrifty)
+
+### Industry-Standard Thresholds
+These thresholds are used by the open-source aws-thrifty project and represent consensus defaults:
+
+| Resource | Metric | Alarm | Warning |
+|----------|--------|-------|---------|
+| EC2 CPU | 30-day avg utilization | <20% (downsize) | <35% (investigate) |
+| RDS CPU | 30-day avg utilization | <25% (downsize) | <50% (investigate) |
+| RDS Connections | 30-day avg daily connections | 0 (unused) | <2 (barely used) |
+| EBS I/O | 30-day avg read+write ops | <100 (unused) | <500 (underused) |
+| Instance Age | Running time | >90 days (review RI/SP) | >30 days |
+| EBS Snapshots | Age | >90 days (consider delete) | — |
+| S3 Buckets | Lifecycle policy | None = alarm | — |
+| Elastic IPs | Attachment status | Unattached = alarm | — |
+
+### EBS Volume Type Migration (Easy Wins)
+| Current | Migrate To | Why |
+|---------|-----------|-----|
+| gp2 | gp3 | gp3 is 20% cheaper with same baseline IOPS (3,000) and higher throughput (125 MB/s vs 128 MB/s). No downside. |
+| io1 | io2 | Same price, but io2 offers 99.999% durability (vs 99.9%). No downside. |
+| io1/io2 with ≤16,000 IOPS | gp3 | gp3 supports up to 16,000 IOPS. If you're under that, gp3 is significantly cheaper. |
+
+### Rightsizing Formula (from OptScale)
+```
+recommended_cpu = ceil(current_cpu / 80 * observed_q99_cpu_utilization)
+projected_cpu_after_resize = min(current_avg_cpu * current_cpu / target_cpu, 100)
+monthly_saving = (current_hourly_price - recommended_hourly_price) * 720
+```
+Default metric: 99th percentile CPU over 30 days, with 80% utilization limit.
+
+### S3 Cost Gotchas (from Vantage Handbook)
+
+**Small object penalty in IA/Glacier:**
+- Standard-IA and One Zone-IA charge minimum 128KB per object
+- Glacier classes add 32KB overhead at Glacier rate + 8KB at Standard rate per object
+- Storing millions of <128KB files in IA costs MORE than Standard class
+
+**Hidden S3 costs most teams miss:**
+1. **Request metrics** — GET/PUT/LIST/COPY all charged per-request. LIST operations on large buckets can spike costs
+2. **Bandwidth egress** — Where runaway costs happen. Use CloudFront or Cloudflare Bandwidth Alliance for heavy egress
+3. **S3 doesn't expose request metrics by default** — Enable via `aws s3api put-bucket-metrics-configuration`
+
+### Savings Plans vs Reserved Instances Decision Tree
+```
+Is the service EC2, Lambda, Fargate, or SageMaker?
+  YES → Use Savings Plans (more flexible, same discount)
+  NO  → Is it RDS, ElastiCache, Redshift, or OpenSearch?
+    YES → Use Reserved Instances (only option)
+    NO  → On-Demand or Spot (if fault-tolerant)
+```
+
+**Key rule:** Savings Plans are ALWAYS preferred over RIs for compute services. RIs only for services not covered by Savings Plans.
+
+### CloudWatch Cost Trap
+- CloudWatch is used automatically by OTHER AWS services — you plan for EC2 costs but get surprise CloudWatch charges
+- **Log Groups retain logs INDEFINITELY by default** — the #1 CloudWatch cost trap
+- Fix: Set explicit retention periods (1 day to 10 years) on every Log Group
+- Progressive metric pricing: first 10K metrics = $0.30/metric/mo, next 240K = $0.10/metric/mo
+
+### NAT Gateway Optimization
+NAT Gateways triple-charge: hourly fee + per-GB processing + standard bandwidth charges.
+**Fix:** Use VPC Endpoints for AWS service traffic (S3, DynamoDB, etc.) — eliminates both NAT hourly and per-GB charges.
+
+### EC2-Other (Mystery Cost Category)
+This catch-all includes: EBS volumes, EBS snapshots, T2/T3/T4g CPU credits (Unlimited mode), NAT Gateway, data transfer, idle Elastic IPs. If this line item spikes, check for stranded resources.
+
+### Anomaly Detection Formula (from OptScale)
+```
+if today_cost > avg_cost_over_N_days * (1 + threshold_pct / 100):
+    trigger_alert(severity='high')
+```
+Default: N=7 days, threshold=30%. Simple but effective moving average with percentage spike detection.

@@ -47,6 +47,8 @@ class ChatResponse(BaseModel):
     response: str
     demo: bool = False
     session_id: str
+    expert: Optional[str] = None
+    expert_name: Optional[str] = None
 
 
 class ChatStreamRequest(BaseModel):
@@ -109,16 +111,22 @@ async def chat(
     # Prepend history to the current messages
     combined_messages = history_messages + body.messages
 
-    response = await run_agent(combined_messages, source, credit_price, user_id=user_id)
+    result = await run_agent(combined_messages, source, credit_price, user_id=user_id)
 
     # Save the new messages + assistant response to the session
     new_messages = []
     for m in body.messages:
         new_messages.append({"role": m["role"], "content": m["content"]})
-    new_messages.append({"role": "assistant", "content": response})
+    new_messages.append({"role": "assistant", "content": result["response"]})
     await append_messages(user_id, session_id, new_messages)
 
-    return ChatResponse(response=response, demo=source is None, session_id=session_id)
+    return ChatResponse(
+        response=result["response"],
+        demo=source is None,
+        session_id=session_id,
+        expert=result.get("expert"),
+        expert_name=result.get("expert_name"),
+    )
 
 
 # ── Streaming chat ───────────────────────────────────────────────────────────
@@ -158,15 +166,19 @@ async def chat_stream(
 
     async def event_generator():
         full_response = ""
+        expert_info = {}
         async for event in run_agent_stream(
             combined_messages, source, credit_price, user_id=user_id
         ):
             if event["type"] == "text":
                 full_response += event["content"]
+            elif event["type"] == "expert":
+                expert_info = {"expert": event["expert"], "expert_name": event["expert_name"]}
             yield f"data: {json.dumps(event)}\n\n"
 
-        # Send done event with session_id
-        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
+        # Send done event with session_id and expert metadata
+        done_event = {"type": "done", "session_id": session_id, **expert_info}
+        yield f"data: {json.dumps(done_event)}\n\n"
 
         # Persist messages to session
         new_messages = []

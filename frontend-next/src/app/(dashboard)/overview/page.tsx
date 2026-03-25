@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useApi } from "@/hooks/use-api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatCard from "@/components/stat-card";
 import { formatCurrency, formatNumber } from "@/lib/format";
@@ -20,6 +21,10 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
+  AlertTriangle,
+  MessageSquare,
+  Lightbulb,
+  Activity,
 } from "lucide-react";
 import {
   BarChart,
@@ -49,6 +54,35 @@ interface UnifiedCosts {
   daily_trend: { date: string; cost: number; aws: number; snowflake: number; openai: number; other: number }[];
   top_resources: { platform: string; resource: string; cost: number; usage: number; trend: number }[];
   demo?: boolean;
+}
+
+interface AnomalyData {
+  type: string;
+  severity: string;
+  platform: string;
+  resource: string;
+  date: string;
+  cost: number;
+  baseline: number;
+  change_pct: number;
+}
+
+interface QuickWin {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  potential_savings: number | null;
+  effort: string;
+  priority: string;
+}
+
+interface PlatformHealth {
+  id: string;
+  platform: string;
+  name: string;
+  last_synced: string | null;
+  created_at: string;
 }
 
 // ─── Label maps ──────────────────────────────────────────────────────────────
@@ -209,6 +243,9 @@ function StackedTooltip({ active, payload, label }: { active?: boolean; payload?
 export default function OverviewPage() {
   const [days, setDays] = useState(30);
   const { data: liveData, loading } = useApi<UnifiedCosts>(`/platforms/costs?days=${days}`, [days]);
+  const { data: anomalies } = useApi<AnomalyData[]>(liveData && !liveData.demo ? `/anomalies?days=${days}` : null, [days, liveData]);
+  const { data: quickWins } = useApi<QuickWin[]>(liveData && !liveData.demo ? '/recommendations' : null, [liveData]);
+  const { data: platforms } = useApi<PlatformHealth[]>(liveData && !liveData.demo ? '/platforms' : null, [liveData]);
 
   // Show empty state only when no platforms are connected (demo flag from backend)
   const hasData = liveData && !liveData.demo;
@@ -289,6 +326,12 @@ export default function OverviewPage() {
   const aiCost = data.by_category.find((c) => c.category === "ai_inference")?.cost ?? 0;
   const aiPct = data.total_cost > 0 ? (aiCost / data.total_cost) * 100 : 0;
 
+  const firstHalf = data.daily_trend.slice(0, Math.floor(data.daily_trend.length / 2));
+  const secondHalf = data.daily_trend.slice(Math.floor(data.daily_trend.length / 2));
+  const firstHalfTotal = firstHalf.reduce((s, d) => s + d.cost, 0);
+  const secondHalfTotal = secondHalf.reduce((s, d) => s + d.cost, 0);
+  const momChange = firstHalfTotal > 0 ? ((secondHalfTotal - firstHalfTotal) / firstHalfTotal) * 100 : 0;
+
   return (
     <div className="space-y-6">
 
@@ -316,7 +359,7 @@ export default function OverviewPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard
           title="Total Spend"
           value={formatCurrency(data.total_cost)}
@@ -340,6 +383,12 @@ export default function OverviewPage() {
           value={formatCurrency(aiCost)}
           icon={Bot}
           description={`${aiPct.toFixed(1)}% of total`}
+        />
+        <StatCard
+          title="Period Trend"
+          value={`${momChange >= 0 ? '+' : ''}${momChange.toFixed(1)}%`}
+          icon={momChange >= 0 ? ArrowUp : ArrowDown}
+          description={`vs prior ${Math.floor(days / 2)}d`}
         />
       </div>
 
@@ -569,6 +618,118 @@ export default function OverviewPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Row 4: Anomalies */}
+      {anomalies && anomalies.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                Cost Anomalies
+              </CardTitle>
+              <span className="text-xs text-slate-400">{anomalies.length} detected</span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {anomalies.slice(0, 6).map((a, i) => (
+                <div key={i} className={`p-3 rounded-lg border ${a.severity === 'high' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-xs font-semibold uppercase ${a.severity === 'high' ? 'text-red-600' : 'text-amber-600'}`}>{a.severity}</span>
+                    <span className="text-xs text-slate-500">{a.date}</span>
+                  </div>
+                  <div className="text-sm font-medium text-slate-800 truncate">{a.resource || a.platform}</div>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-xs text-slate-500">{formatCurrency(a.baseline)} baseline</span>
+                    <span className="text-xs font-semibold text-red-600">+{a.change_pct.toFixed(0)}%</span>
+                  </div>
+                  <button
+                    onClick={() => window.location.href = `/chat?q=Why did ${a.resource || a.platform} costs spike on ${a.date}?`}
+                    className="mt-2 text-xs text-sky-600 hover:text-sky-700 font-medium flex items-center gap-1"
+                  >
+                    <MessageSquare className="h-3 w-3" />
+                    Ask Expert
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Row 5: Quick Wins */}
+      {quickWins && quickWins.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-amber-500" />
+                Quick Wins
+              </CardTitle>
+              <Button variant="ghost" size="sm" className="h-7 text-xs text-sky-600" onClick={() => window.location.href = '/recommendations'}>
+                View all
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-3 gap-3">
+              {quickWins
+                .filter((r) => r.priority === 'high' || r.potential_savings)
+                .slice(0, 3)
+                .map((r) => (
+                  <div key={r.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Badge variant={r.priority === 'high' ? 'destructive' : 'secondary'} className="text-[10px] h-5">{r.priority}</Badge>
+                      <Badge variant="outline" className="text-[10px] h-5">{r.effort}</Badge>
+                    </div>
+                    <div className="text-sm font-medium text-slate-800 mb-1">{r.title}</div>
+                    <div className="text-xs text-slate-500 line-clamp-2">{r.description}</div>
+                    {r.potential_savings && r.potential_savings > 0 && (
+                      <div className="mt-2 text-sm font-semibold text-emerald-600">
+                        Save ~{formatCurrency(r.potential_savings)}/mo
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Row 6: Platform Health */}
+      {platforms && platforms.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-sky-500" />
+              Platform Health
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {platforms.map((p) => {
+                const lastSync = p.last_synced ? new Date(p.last_synced) : null;
+                const hoursAgo = lastSync ? (Date.now() - lastSync.getTime()) / (1000 * 60 * 60) : null;
+                const isStale = hoursAgo !== null && hoursAgo > 24;
+                const isFresh = hoursAgo !== null && hoursAgo <= 1;
+                return (
+                  <div key={p.id} className={`p-3 rounded-lg border ${isStale ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-slate-800">{PLATFORM_LABELS[p.platform] || p.platform}</span>
+                      <div className={`h-2 w-2 rounded-full ${isFresh ? 'bg-emerald-400' : isStale ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">{p.name}</div>
+                    <div className={`text-xs mt-1 ${isStale ? 'text-amber-600 font-medium' : 'text-slate-400'}`}>
+                      {lastSync ? (hoursAgo! < 1 ? 'Just now' : hoursAgo! < 24 ? `${Math.round(hoursAgo!)}h ago` : `${Math.round(hoursAgo! / 24)}d ago`) : 'Never synced'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

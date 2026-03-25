@@ -45,3 +45,35 @@ Token-based billing. Input and output tokens priced separately.
 - Granularity: 1m, 1h, 1d
 - Group by: model, project, api_key
 - Also: `/v1/organization/costs` for dollar amounts
+
+## Fine-Tuning Costs
+| Model | Training (per 1M tokens) | Input (per 1M) | Output (per 1M) |
+|-------|-------------------------|----------------|-----------------|
+| GPT-4o | $25.00 | $3.75 | $15.00 |
+| GPT-4o-mini | $3.00 | $0.30 | $1.20 |
+
+**Gotcha:** Fine-tuning costs include both training AND higher inference costs. A fine-tuned GPT-4o-mini costs 2x regular inference. Only fine-tune if it eliminates expensive few-shot examples or replaces a larger model.
+
+## Image Generation Costs
+| Model | Quality | Resolution | Price per Image |
+|-------|---------|-----------|----------------|
+| DALL-E 3 | Standard | 1024×1024 | $0.040 |
+| DALL-E 3 | HD | 1024×1792 | $0.080 |
+| GPT-Image-1 | Standard | Auto | $0.020-0.040 |
+
+## Audio Costs
+| Model | Price |
+|-------|-------|
+| Whisper (STT) | $0.006/minute |
+| TTS | $15.00/1M characters |
+| TTS HD | $30.00/1M characters |
+
+## Realtime API
+- Audio input: $40.00/1M tokens (GPT-4o), $2.50 (GPT-4o-mini)
+- Audio output: $80.00/1M tokens (GPT-4o), $10.00 (GPT-4o-mini)
+- **Very expensive** — 16x text pricing. Use only for real-time voice applications.
+
+## Responses API vs Chat Completions
+The newer Responses API supports tool_use and web_search built-in. Web search is charged at:
+- $25.00/1K search calls (low), $30.00 (medium), $50.00 (high context)
+- Can add significant cost if search is triggered frequently

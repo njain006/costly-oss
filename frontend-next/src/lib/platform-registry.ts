@@ -260,6 +260,70 @@ const AWS: PlatformRegistryEntry = {
       ],
       table: { key: "buckets", title: "Buckets", columns: [{ key: "name", label: "Bucket" }, { key: "size_display", label: "Size" }, { key: "objects", label: "Objects", align: "right" }, { key: "region", label: "Region" }, { key: "created", label: "Created" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
     },
+    {
+      slug: "ec2",
+      label: "EC2",
+      icon: Server,
+      kpis: [
+        { key: "total_cost", title: "Total Cost", format: "currency", icon: DollarSign },
+        { key: "instance_count", title: "Instances", format: "number", icon: Server },
+        { key: "avg_utilization", title: "Avg CPU", format: "percent", icon: Activity },
+        { key: "savings_opportunity", title: "Savings Opportunity", format: "currency", icon: Sparkles },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily EC2 Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "on_demand", label: "On-Demand" }, { key: "reserved", label: "Reserved" }, { key: "spot", label: "Spot" }], span: 2 },
+        { key: "by_family", title: "By Instance Family", type: "pie", xKey: "family", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "instances", title: "EC2 Instances", columns: [{ key: "instance_id", label: "Instance" }, { key: "type", label: "Type" }, { key: "state", label: "State" }, { key: "avg_cpu", label: "Avg CPU", format: "percent", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "lambda",
+      label: "Lambda",
+      icon: Zap,
+      kpis: [
+        { key: "total_cost", title: "Total Cost", format: "currency", icon: DollarSign },
+        { key: "invocations", title: "Invocations", format: "number", icon: Zap },
+        { key: "avg_duration", title: "Avg Duration", format: "duration", icon: Clock },
+        { key: "error_rate", title: "Error Rate", format: "percent", icon: Shield },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "compute_cost", label: "Compute" }, { key: "request_cost", label: "Requests" }], span: 2 },
+        { key: "top_functions", title: "Top Functions by Cost", type: "horizontal-bar", xKey: "function", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "functions", title: "Lambda Functions", columns: [{ key: "function", label: "Function" }, { key: "runtime", label: "Runtime" }, { key: "invocations", label: "Invocations", format: "number", align: "right" }, { key: "avg_duration_ms", label: "Avg Duration", format: "duration", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "rds",
+      label: "RDS",
+      icon: Database,
+      kpis: [
+        { key: "total_cost", title: "Total Cost", format: "currency", icon: DollarSign },
+        { key: "instance_count", title: "Instances", format: "number", icon: Database },
+        { key: "avg_cpu", title: "Avg CPU", format: "percent", icon: Activity },
+        { key: "avg_connections", title: "Avg Connections", format: "number", icon: Users },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "compute_cost", label: "Compute" }, { key: "storage_cost", label: "Storage" }, { key: "io_cost", label: "I/O" }], span: 2 },
+        { key: "by_engine", title: "By Engine", type: "pie", xKey: "engine", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "instances", title: "RDS Instances", columns: [{ key: "instance_id", label: "Instance" }, { key: "engine", label: "Engine" }, { key: "class", label: "Class" }, { key: "multi_az", label: "Multi-AZ" }, { key: "cpu_pct", label: "CPU", format: "percent", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "transfer",
+      label: "Data Transfer",
+      icon: Network,
+      kpis: [
+        { key: "total_cost", title: "Transfer Cost", format: "currency", icon: DollarSign },
+        { key: "total_gb", title: "Total Data", format: "bytes", icon: Globe },
+        { key: "egress_cost", title: "Egress Cost", format: "currency", icon: Network },
+        { key: "nat_gateway_cost", title: "NAT Gateway", format: "currency", icon: Shield },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily Transfer Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "internet_egress", label: "Internet Egress" }, { key: "cross_region", label: "Cross-Region" }, { key: "nat_gateway", label: "NAT Gateway" }], span: 2 },
+        { key: "by_type", title: "By Transfer Type", type: "pie", xKey: "type", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "transfers", title: "Transfer Breakdown", columns: [{ key: "type", label: "Type" }, { key: "source", label: "Source" }, { key: "destination", label: "Destination" }, { key: "gb", label: "Data", format: "bytes", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
   ],
 };
 
@@ -361,6 +425,70 @@ const DATABRICKS: PlatformRegistryEntry = {
         { key: "top_jobs", title: "Top Jobs by Cost", type: "horizontal-bar", xKey: "job", yKeys: [{ key: "cost", label: "Cost" }] },
       ],
       table: { key: "jobs", title: "Jobs", columns: [{ key: "job", label: "Job Name" }, { key: "runs", label: "Runs", format: "number", align: "right" }, { key: "avg_duration_ms", label: "Avg Duration", format: "duration", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "sql-warehouses",
+      label: "SQL Warehouses",
+      icon: Database,
+      kpis: [
+        { key: "total_cost", title: "Total Cost", format: "currency", icon: DollarSign },
+        { key: "warehouse_count", title: "Warehouses", format: "number", icon: Warehouse },
+        { key: "total_dbu", title: "DBUs Used", format: "number", icon: Gauge },
+        { key: "avg_query_time", title: "Avg Query Time", format: "duration", icon: Clock },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily SQL Warehouse Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "serverless", label: "Serverless" }, { key: "pro", label: "Pro" }, { key: "classic", label: "Classic" }], span: 2 },
+        { key: "by_warehouse", title: "By Warehouse", type: "pie", xKey: "warehouse", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "warehouses", title: "SQL Warehouses", columns: [{ key: "name", label: "Warehouse" }, { key: "type", label: "Type" }, { key: "size", label: "Size" }, { key: "state", label: "State" }, { key: "dbu", label: "DBUs", format: "number", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "clusters",
+      label: "Clusters",
+      icon: Server,
+      kpis: [
+        { key: "total_cost", title: "Cluster Cost", format: "currency", icon: DollarSign },
+        { key: "cluster_count", title: "Clusters", format: "number", icon: Server },
+        { key: "avg_utilization", title: "Avg Utilization", format: "percent", icon: Activity },
+        { key: "idle_cost", title: "Idle Cost", format: "currency", icon: Clock },
+      ],
+      charts: [
+        { key: "daily_trend", title: "Daily Cluster Cost", type: "stacked-area", xKey: "date", yKeys: [{ key: "interactive", label: "Interactive" }, { key: "automated", label: "Automated" }], span: 2 },
+        { key: "by_cluster", title: "Top Clusters by Cost", type: "horizontal-bar", xKey: "cluster", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "clusters", title: "All Clusters", columns: [{ key: "name", label: "Cluster" }, { key: "type", label: "Type" }, { key: "node_type", label: "Node Type" }, { key: "workers", label: "Workers", format: "number", align: "right" }, { key: "dbu_rate", label: "DBU/hr", format: "number", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "storage",
+      label: "Storage",
+      icon: HardDrive,
+      kpis: [
+        { key: "total_storage", title: "Total Storage", format: "bytes", icon: HardDrive },
+        { key: "storage_cost", title: "Storage Cost", format: "currency", icon: DollarSign },
+        { key: "table_count", title: "Delta Tables", format: "number", icon: Layers },
+        { key: "optimize_savings", title: "Optimize Savings", format: "currency", icon: Sparkles },
+      ],
+      charts: [
+        { key: "storage_trend", title: "Storage Trend", type: "area", xKey: "date", yKeys: [{ key: "managed_bytes", label: "Managed" }, { key: "external_bytes", label: "External" }], span: 2 },
+        { key: "by_catalog", title: "By Catalog", type: "pie", xKey: "catalog", yKeys: [{ key: "bytes", label: "Size" }] },
+      ],
+      table: { key: "tables", title: "Largest Tables", columns: [{ key: "catalog", label: "Catalog" }, { key: "schema", label: "Schema" }, { key: "table", label: "Table" }, { key: "bytes", label: "Size", format: "bytes", align: "right" }, { key: "files", label: "Files", format: "number", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
+    },
+    {
+      slug: "sku",
+      label: "SKU Breakdown",
+      icon: PieChart,
+      kpis: [
+        { key: "total_cost", title: "Total Cost", format: "currency", icon: DollarSign },
+        { key: "interactive_cost", title: "Interactive", format: "currency", icon: Cpu },
+        { key: "automated_cost", title: "Automated", format: "currency", icon: Workflow },
+        { key: "sql_cost", title: "SQL Compute", format: "currency", icon: Database },
+      ],
+      charts: [
+        { key: "daily_by_sku", title: "Daily Cost by SKU", type: "stacked-area", xKey: "date", yKeys: [{ key: "interactive", label: "Interactive ($0.55/DBU)" }, { key: "automated", label: "Automated ($0.15/DBU)" }, { key: "sql_compute", label: "SQL ($0.22/DBU)" }, { key: "jobs_light", label: "Jobs Light ($0.10/DBU)" }], span: 2 },
+        { key: "by_sku", title: "By SKU", type: "pie", xKey: "sku", yKeys: [{ key: "cost", label: "Cost" }] },
+      ],
+      table: { key: "sku_details", title: "SKU Details", columns: [{ key: "sku", label: "SKU" }, { key: "dbu_rate", label: "Rate ($/DBU)" }, { key: "dbu_consumed", label: "DBUs", format: "number", align: "right" }, { key: "photon_multiplier", label: "Photon", format: "number", align: "right" }, { key: "cost", label: "Cost", format: "currency", align: "right" }] },
     },
   ],
 };

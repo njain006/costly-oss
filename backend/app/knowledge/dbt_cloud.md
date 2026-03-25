@@ -58,3 +58,41 @@ dbt Cloud's own bill is usually small. The **warehouse compute it triggers** is 
 ### 3. "Development is expensive"
 - Developers running `dbt run` on Large warehouses
 - Fix: Dev profiles use X-Small warehouse, limit to subset of models
+
+## dbt Cloud Build Metrics (from dbt_artifacts)
+
+### Cost-Per-Model Attribution
+The key to understanding dbt costs is tracking warehouse compute per model:
+```
+model_cost = (model_execution_seconds / 3600) * warehouse_credits_per_hour * credit_price
+```
+
+Use query tagging (`dbt-snowflake-query-tags` package) to attribute Snowflake costs back to specific dbt models.
+
+### DAG Anti-Patterns That Waste Compute (from dbt-project-evaluator)
+1. **Rejoining to sources** — downstream models querying raw sources instead of using upstream models. Forces redundant scans.
+2. **Excessive staging models** — each model materializes as a table/view with overhead. Consolidate where possible.
+3. **Fan-out without fan-in** — wide DAGs with many branches but no aggregation point. Each branch runs in parallel consuming warehouse credits.
+4. **Missing incremental candidates** — large tables rebuilt daily that only need new/changed rows.
+
+### Environment-Based Cost Optimization
+| Environment | Strategy | Estimated Savings |
+|-------------|---------|------------------|
+| Development | Limit data with `target.name == 'dev'` macro, use X-Small warehouse | 80-90% |
+| CI/PR | `dbt build --select state:modified+`, defer to prod | 70-90% |
+| Staging | Full run but on smaller warehouse, less frequent | 30-50% |
+| Production | Optimized warehouse sizing, incremental where possible | Baseline |
+
+### Scheduling Optimization
+- Stagger job schedules to avoid warehouse contention
+- Group related models in a single job (one warehouse resume vs multiple)
+- Use `dbt source freshness` as a trigger instead of time-based schedules
+- Avoid running hourly if daily is sufficient — 24x cost difference
+
+### dbt Cloud API for Cost Monitoring
+```
+GET /api/v2/accounts/{account_id}/runs/
+GET /api/v2/accounts/{account_id}/runs/{run_id}/
+```
+Key fields: `run_duration_humanized`, `models_generated`, `status`, `created_at`
+Use these to track model build counts (which drive dbt Cloud billing) and correlate with warehouse costs.
