@@ -8,8 +8,20 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "costly - Data Cost Intelligence Platform",
-  description: "See every dollar your data stack costs — warehouses, pipelines, BI, AI, and CI/CD in one dashboard",
+  title: "Costly — AI-Powered Data Platform Cost Intelligence",
+  description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms. Connect read-only, get optimization recommendations in minutes.",
+  openGraph: {
+    title: "Costly — AI-Powered Data Platform Cost Intelligence",
+    description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms. Connect read-only, get optimization recommendations in minutes.",
+    url: "https://costly.cdatainsights.com",
+    siteName: "Costly",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Costly — AI-Powered Data Platform Cost Intelligence",
+    description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms.",
+  },
 };
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "placeholder";
