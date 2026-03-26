@@ -145,4 +145,5 @@ async def unified_cost_summary(
     days: int = Query(30, ge=1, le=365),
     user_id: str = Depends(get_current_user),
 ):
+    # TODO: frontend rendering of by_account breakdown is a tracked follow-up
     return await get_unified_costs(user_id, days)

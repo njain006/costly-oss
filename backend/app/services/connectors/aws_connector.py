@@ -97,6 +97,13 @@ class AWSConnector(BaseConnector):
             aws_secret_access_key=credentials["aws_secret_access_key"],
             region_name=self.region,
         )
+        sts = boto3.client(
+            "sts",
+            aws_access_key_id=credentials["aws_access_key_id"],
+            aws_secret_access_key=credentials["aws_secret_access_key"],
+            region_name=self.region,
+        )
+        self.account_id: str = sts.get_caller_identity()["Account"]
 
     def test_connection(self) -> dict:
         try:
@@ -155,6 +162,7 @@ class AWSConnector(BaseConnector):
                     cost_usd=round(amount, 4),
                     usage_quantity=round(usage, 4),
                     usage_unit=usage_unit,
+                    metadata={"account_id": self.account_id},
                 ))
 
         return costs
@@ -222,6 +230,7 @@ class AWSConnector(BaseConnector):
                     usage_quantity=size_gb,
                     usage_unit="GB",
                     metadata={
+                        "account_id": self.account_id,
                         "type": "inventory",
                         "created": created_str,
                         "size_bytes": size_bytes,
@@ -254,6 +263,7 @@ class AWSConnector(BaseConnector):
                         usage_quantity=0,
                         usage_unit="instance",
                         metadata={
+                            "account_id": self.account_id,
                             "type": "inventory",
                             "instance_type": inst.get("InstanceType", ""),
                             "state": inst.get("State", {}).get("Name", ""),
@@ -278,6 +288,7 @@ class AWSConnector(BaseConnector):
                     usage_quantity=0,
                     usage_unit="function",
                     metadata={
+                        "account_id": self.account_id,
                         "type": "inventory",
                         "runtime": fn.get("Runtime", ""),
                         "memory_mb": fn.get("MemorySize", 0),
