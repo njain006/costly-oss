@@ -71,6 +71,7 @@ async def get_platform_connections(user_id: str) -> list[dict]:
 async def add_platform_connection(user_id: str, platform: str, name: str, credentials: dict) -> dict:
     """Store a new platform connection with encrypted credentials."""
     from app.services.encryption import encrypt_value
+    from app.utils.helpers import run_in_thread
 
     encrypted_creds = {}
     for k, v in credentials.items():
@@ -88,6 +89,15 @@ async def add_platform_connection(user_id: str, platform: str, name: str, creden
         "created_at": datetime.utcnow().isoformat(),
         "last_synced": None,
     }
+
+    if platform == "aws":
+        try:
+            from app.services.connectors.aws_connector import AWSConnector
+            connector = await run_in_thread(lambda: AWSConnector(credentials))
+            doc["account_id"] = connector.account_id
+        except Exception:
+            pass
+
     result = await db.platform_connections.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
     return doc
@@ -136,9 +146,12 @@ async def sync_platform_costs(user_id: str, connection_id: str, days: int = 30) 
         doc = cost.model_dump()
         doc["user_id"] = user_id
         doc["connection_id"] = connection_id
+        doc["account_name"] = conn["name"]
+        doc["account_id"] = conn.get("account_id", "")
         ops.append({
             "filter": {
                 "user_id": user_id,
+                "connection_id": connection_id,
                 "date": cost.date,
                 "platform": cost.platform,
                 "service": cost.service,
@@ -281,6 +294,21 @@ async def get_unified_costs(user_id: str, days: int = 30) -> dict:
         {"$limit": 20},
     ]).to_list(20)
 
+    # By account — per-connection breakdown (useful when multiple accounts share a platform)
+    by_account = await db.unified_costs.aggregate([
+        {"$match": {"user_id": user_id, "date": {"$gte": since}}},
+        {"$group": {
+            "_id": {
+                "platform": "$platform",
+                "connection_id": "$connection_id",
+                "account_name": {"$ifNull": ["$account_name", "Unknown"]},
+            },
+            "account_id": {"$first": "$account_id"},
+            "cost": {"$sum": "$cost_usd"},
+        }},
+        {"$sort": {"cost": -1}},
+    ]).to_list(200)
+
     return {
         "total_cost": round(total_cost, 2),
         "days": days,
@@ -296,5 +324,15 @@ async def get_unified_costs(user_id: str, days: int = 30) -> dict:
                 "usage": round(r["usage"], 2),
             }
             for r in top_resources
+        ],
+        "by_account": [
+            {
+                "platform": r["_id"]["platform"],
+                "connection_id": r["_id"].get("connection_id"),
+                "account_name": r["_id"]["account_name"],
+                "account_id": r.get("account_id", ""),
+                "cost": round(r["cost"], 2),
+            }
+            for r in by_account
         ],
     }

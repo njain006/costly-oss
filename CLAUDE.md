@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Costly is a Snowflake cost analytics and optimization platform. It connects to a customer's Snowflake account via read-only key-pair auth, queries ACCOUNT_USAGE views, and surfaces cost anomalies, optimization recommendations, and performance insights. It can also execute optimization actions (warehouse resizing, auto-suspend tuning, clustering keys) directly.
+Costly is a cloud cost analytics and optimization platform. It connects to a customer's cloud accounts (e.g., Snowflake) via read-only key-pair auth, queries ACCOUNT_USAGE views, and surfaces cost anomalies, optimization recommendations, and performance insights. It can also execute optimization actions (warehouse resizing, auto-suspend tuning, clustering keys) directly.
 
 **Self-hosted** — deploy anywhere with Docker Compose
 **Repo:** https://github.com/njain006/costly-oss.git
