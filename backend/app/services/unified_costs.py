@@ -9,6 +9,7 @@ from app.models.platform import PlatformType, UnifiedCost
 from app.services.connectors.base import BaseConnector
 from app.services.connectors.aws_connector import AWSConnector
 from app.services.connectors.anthropic_connector import AnthropicConnector
+from app.services.connectors.claude_code_connector import ClaudeCodeConnector
 from app.services.connectors.dbt_cloud_connector import DbtCloudConnector
 from app.services.connectors.openai_connector import OpenAIConnector
 from app.services.connectors.fivetran_connector import FivetranConnector
@@ -29,6 +30,7 @@ CONNECTOR_MAP: dict[str, type[BaseConnector]] = {
     "snowflake": SnowflakeConnector,
     "aws": AWSConnector,
     "anthropic": AnthropicConnector,
+    "claude_code": ClaudeCodeConnector,
     "dbt_cloud": DbtCloudConnector,
     "openai": OpenAIConnector,
     "fivetran": FivetranConnector,

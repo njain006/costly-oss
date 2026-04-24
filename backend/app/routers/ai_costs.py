@@ -1,10 +1,12 @@
 """AI Costs dashboard — cross-provider AI spend intelligence.
 
-Aggregates cost and token data from OpenAI, Anthropic, and Gemini
-connectors into KPIs, provider comparisons, trends, and recommendations.
+Aggregates cost and token data from OpenAI, Anthropic, Claude Code, and
+Gemini connectors into KPIs, provider comparisons, trends, and
+recommendations. Surfaces cache-tier metrics (read / write / hit rate
+/ $ saved) that are unique to the Anthropic + Claude Code connectors.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
@@ -13,7 +15,7 @@ from app.database import db
 
 router = APIRouter(prefix="/api/ai-costs", tags=["ai-costs"])
 
-AI_PLATFORMS = ["openai", "anthropic", "gemini"]
+AI_PLATFORMS = ["openai", "anthropic", "claude_code", "gemini"]
 
 # Model migration mapping: expensive → cheaper alternative
 MODEL_ALTERNATIVES = {
@@ -31,8 +33,9 @@ async def get_ai_costs(
     days: int = Query(30, ge=1, le=365),
     user_id: str = Depends(get_current_user),
 ):
-    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-    prev_since = (datetime.utcnow() - timedelta(days=days * 2)).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    prev_since = (now - timedelta(days=days * 2)).strftime("%Y-%m-%d")
 
     base_match = {
         "user_id": user_id,
@@ -45,17 +48,28 @@ async def get_ai_costs(
 
     count = await db.unified_costs.count_documents(current_match)
     if count == 0:
-        return {"demo": True, "kpis": {}, "providers": [], "daily_spend": [],
+        empty_kpis = {
+            "total_cost": 0, "total_tokens": 0, "avg_cost_per_1k": 0,
+            "mom_change": None, "model_count": 0, "provider_count": 0,
+            "cache_hit_rate": 0, "cache_savings_usd": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+        }
+        return {"demo": True, "kpis": empty_kpis, "providers": [], "daily_spend": [],
                 "daily_tokens": [], "cost_per_1k_trend": [], "model_breakdown": [],
                 "recommendations": []}
 
-    # --- KPIs ---
+    # --- KPIs (incl. cache-tier metrics from Anthropic + Claude Code) ---
     kpi_result = await db.unified_costs.aggregate([
         {"$match": current_match},
         {"$group": {
             "_id": None,
             "total_cost": {"$sum": "$cost_usd"},
             "total_tokens": {"$sum": "$usage_quantity"},
+            "cache_read_tokens": {"$sum": {"$ifNull": ["$metadata.cache_read_tokens", 0]}},
+            "cache_write_5m_tokens": {"$sum": {"$ifNull": ["$metadata.cache_write_5m_tokens", 0]}},
+            "cache_write_1h_tokens": {"$sum": {"$ifNull": ["$metadata.cache_write_1h_tokens", 0]}},
+            "input_tokens": {"$sum": {"$ifNull": ["$metadata.input_tokens", 0]}},
+            "output_tokens": {"$sum": {"$ifNull": ["$metadata.output_tokens", 0]}},
             "models": {"$addToSet": "$resource"},
             "providers": {"$addToSet": "$platform"},
         }},
@@ -66,12 +80,30 @@ async def get_ai_costs(
         {"$group": {"_id": None, "total_cost": {"$sum": "$cost_usd"}}},
     ]).to_list(1)
 
-    kpi = kpi_result[0] if kpi_result else {"total_cost": 0, "total_tokens": 0, "models": [], "providers": []}
+    kpi = kpi_result[0] if kpi_result else {
+        "total_cost": 0, "total_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_5m_tokens": 0, "cache_write_1h_tokens": 0,
+        "input_tokens": 0, "output_tokens": 0,
+        "models": [], "providers": [],
+    }
     prev_cost = prev_result[0]["total_cost"] if prev_result else 0
     total_cost = kpi["total_cost"]
     total_tokens = kpi["total_tokens"]
     avg_cost_per_1k = (total_cost / total_tokens * 1000) if total_tokens > 0 else 0
     mom_change = ((total_cost - prev_cost) / prev_cost * 100) if prev_cost > 0 else None
+
+    # Cache metrics: hit rate = cache_read / (cache_read + uncached_input + cache_write)
+    cache_read = kpi["cache_read_tokens"]
+    cache_write = kpi["cache_write_5m_tokens"] + kpi["cache_write_1h_tokens"]
+    uncached_input = kpi["input_tokens"]
+    cache_denominator = cache_read + cache_write + uncached_input
+    cache_hit_rate = (cache_read / cache_denominator * 100) if cache_denominator > 0 else 0
+
+    # $ saved vs list price: cache_read would have cost (cache_read × list_price_per_token)
+    # Approximation — use a weighted average input rate across providers.
+    # Anthropic Sonnet default: $3/M input; cache_read is 10% of that.
+    # So savings per cache_read_token = $3/M × 0.90 = $2.70/M
+    cache_savings_usd = round((cache_read * 2.70) / 1_000_000, 2)
 
     # --- Provider comparison ---
     providers = await db.unified_costs.aggregate([
@@ -112,24 +144,34 @@ async def get_ai_costs(
     for row in daily_raw:
         d = row["_id"]["date"]
         if d not in daily_map:
-            daily_map[d] = {"date": d, "openai": 0, "anthropic": 0, "gemini": 0}
+            daily_map[d] = {"date": d, "openai": 0, "anthropic": 0, "claude_code": 0, "gemini": 0}
         daily_map[d][row["_id"]["platform"]] = round(row["cost"], 2)
     daily_spend = sorted(daily_map.values(), key=lambda x: x["date"])
 
-    # --- Daily tokens (input vs output) ---
+    # --- Daily tokens by tier (input / output / cache_read / cache_write) ---
     daily_tokens_raw = await db.unified_costs.aggregate([
         {"$match": current_match},
         {"$group": {
             "_id": "$date",
             "input_tokens": {"$sum": {"$ifNull": ["$metadata.input_tokens", 0]}},
             "output_tokens": {"$sum": {"$ifNull": ["$metadata.output_tokens", 0]}},
+            "cache_read_tokens": {"$sum": {"$ifNull": ["$metadata.cache_read_tokens", 0]}},
+            "cache_write_5m_tokens": {"$sum": {"$ifNull": ["$metadata.cache_write_5m_tokens", 0]}},
+            "cache_write_1h_tokens": {"$sum": {"$ifNull": ["$metadata.cache_write_1h_tokens", 0]}},
             "total_tokens": {"$sum": "$usage_quantity"},
         }},
         {"$sort": {"_id": 1}},
     ]).to_list(500)
 
     daily_tokens = [
-        {"date": r["_id"], "input": r["input_tokens"], "output": r["output_tokens"], "total": r["total_tokens"]}
+        {
+            "date": r["_id"],
+            "input": r["input_tokens"],
+            "output": r["output_tokens"],
+            "cache_read": r["cache_read_tokens"],
+            "cache_write": r["cache_write_5m_tokens"] + r["cache_write_1h_tokens"],
+            "total": r["total_tokens"],
+        }
         for r in daily_tokens_raw
     ]
 
@@ -180,6 +222,10 @@ async def get_ai_costs(
             "mom_change": round(mom_change, 1) if mom_change is not None else None,
             "model_count": len(kpi.get("models", [])),
             "provider_count": len(kpi.get("providers", [])),
+            "cache_hit_rate": round(cache_hit_rate, 1),
+            "cache_savings_usd": cache_savings_usd,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
         },
         "providers": provider_list,
         "daily_spend": daily_spend,

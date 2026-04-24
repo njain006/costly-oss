@@ -6,7 +6,7 @@ import StatCard from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DollarSign, Zap, TrendingUp, ArrowUpRight, ArrowDownRight, Bot, Lightbulb } from "lucide-react";
+import { DollarSign, Zap, TrendingUp, ArrowUpRight, ArrowDownRight, Bot, Lightbulb, Sparkles, PiggyBank } from "lucide-react";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { COLORS, DATE_OPTIONS } from "@/lib/constants";
 import {
@@ -17,12 +17,14 @@ import {
 const PROVIDER_COLORS: Record<string, string> = {
   openai: COLORS.chart[0],
   anthropic: COLORS.chart[1],
+  claude_code: COLORS.chart[5],
   gemini: COLORS.chart[2],
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
-  anthropic: "Anthropic",
+  anthropic: "Anthropic API",
+  claude_code: "Claude Code",
   gemini: "Gemini",
 };
 
@@ -34,6 +36,10 @@ interface AiCostsData {
     mom_change: number | null;
     model_count: number;
     provider_count: number;
+    cache_hit_rate: number;
+    cache_savings_usd: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
   };
   providers: Array<{
     platform: string;
@@ -43,8 +49,15 @@ interface AiCostsData {
     output_tokens: number;
     cost_per_1k: number;
   }>;
-  daily_spend: Array<{ date: string; openai: number; anthropic: number; gemini: number }>;
-  daily_tokens: Array<{ date: string; input: number; output: number; total: number }>;
+  daily_spend: Array<{ date: string; openai: number; anthropic: number; claude_code: number; gemini: number }>;
+  daily_tokens: Array<{
+    date: string;
+    input: number;
+    output: number;
+    cache_read: number;
+    cache_write: number;
+    total: number;
+  }>;
   cost_per_1k_trend: Array<{ date: string; cost_per_1k: number }>;
   model_breakdown: Array<{
     model: string;
@@ -123,10 +136,22 @@ export default function AiCostsPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPI Cards — 6 tiles to keep cache savings visible (the wedge vs Vantage/CloudZero) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard title="Total AI Spend" value={formatCurrency(kpis.total_cost)} icon={DollarSign} />
         <StatCard title="Total Tokens" value={formatNumber(kpis.total_tokens)} icon={Zap} />
+        <StatCard
+          title="Cache Hit Rate"
+          value={`${kpis.cache_hit_rate.toFixed(1)}%`}
+          icon={Sparkles}
+          description={`${formatNumber(kpis.cache_read_tokens)} cached / ${formatNumber(kpis.cache_write_tokens)} written`}
+        />
+        <StatCard
+          title="Saved by Caching"
+          value={formatCurrency(kpis.cache_savings_usd)}
+          icon={PiggyBank}
+          description="vs list-price input"
+        />
         <StatCard
           title="Avg $/1K Tokens"
           value={`$${kpis.avg_cost_per_1k.toFixed(3)}`}
@@ -136,7 +161,7 @@ export default function AiCostsPage() {
           title="vs Previous Period"
           value={kpis.mom_change !== null ? `${kpis.mom_change > 0 ? "+" : ""}${kpis.mom_change.toFixed(1)}%` : "N/A"}
           icon={kpis.mom_change !== null && kpis.mom_change > 0 ? ArrowUpRight : ArrowDownRight}
-          description={`${kpis.model_count} models across ${kpis.provider_count} providers`}
+          description={`${kpis.model_count} models · ${kpis.provider_count} providers`}
         />
       </div>
 
@@ -201,35 +226,40 @@ export default function AiCostsPage() {
                   contentStyle={{ fontSize: 12 }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="anthropic" name="Anthropic API" stackId="1"
+                  fill={PROVIDER_COLORS.anthropic} stroke={PROVIDER_COLORS.anthropic} fillOpacity={0.65} />
+                <Area type="monotone" dataKey="claude_code" name="Claude Code" stackId="1"
+                  fill={PROVIDER_COLORS.claude_code} stroke={PROVIDER_COLORS.claude_code} fillOpacity={0.65} />
                 <Area type="monotone" dataKey="openai" name="OpenAI" stackId="1"
-                  fill={PROVIDER_COLORS.openai} stroke={PROVIDER_COLORS.openai} fillOpacity={0.6} />
-                <Area type="monotone" dataKey="anthropic" name="Anthropic" stackId="1"
-                  fill={PROVIDER_COLORS.anthropic} stroke={PROVIDER_COLORS.anthropic} fillOpacity={0.6} />
+                  fill={PROVIDER_COLORS.openai} stroke={PROVIDER_COLORS.openai} fillOpacity={0.65} />
                 <Area type="monotone" dataKey="gemini" name="Gemini" stackId="1"
-                  fill={PROVIDER_COLORS.gemini} stroke={PROVIDER_COLORS.gemini} fillOpacity={0.6} />
+                  fill={PROVIDER_COLORS.gemini} stroke={PROVIDER_COLORS.gemini} fillOpacity={0.65} />
               </AreaChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* Input vs Output Tokens */}
+        {/* Token tier breakdown — cache_read / cache_write / input / output */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Input vs Output Tokens</CardTitle>
+            <CardTitle className="text-base">Daily Tokens by Tier</CardTitle>
+            <p className="text-xs text-slate-500">Cache reads are 10% of list input price; writes are 25–100% premium.</p>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={daily_tokens.slice(-14)}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(8)} />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
                 <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => formatNumber(v)} />
                 <Tooltip
-                  formatter={(v) => formatNumber(Number(v))}
+                  formatter={(v, name) => [formatNumber(Number(v)), String(name)]}
                   contentStyle={{ fontSize: 12 }}
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="input" name="Input" fill={COLORS.chart[3]} radius={[2, 2, 0, 0]} />
-                <Bar dataKey="output" name="Output" fill={COLORS.chart[4]} radius={[2, 2, 0, 0]} />
+                <Bar dataKey="cache_read" name="Cache read" stackId="t" fill={COLORS.chart[6]} />
+                <Bar dataKey="cache_write" name="Cache write" stackId="t" fill={COLORS.chart[7]} />
+                <Bar dataKey="input" name="Uncached input" stackId="t" fill={COLORS.chart[3]} />
+                <Bar dataKey="output" name="Output" stackId="t" fill={COLORS.chart[4]} radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>

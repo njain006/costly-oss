@@ -1,0 +1,19 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.usage.code_interpreter_sessions.result",
+          "project_id": "proj_alpha",
+          "num_sessions": 42
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

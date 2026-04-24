@@ -21,3 +21,4 @@ slowapi
 pytest
 pytest-asyncio
 pytest-cov
+databricks-sql-connector>=3.0.0

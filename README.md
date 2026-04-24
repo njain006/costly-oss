@@ -1,59 +1,58 @@
-# Costly — Open-Source Data Platform Cost Intelligence
+# Costly — Open-source AI &amp; Data Cost Intelligence
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/njain006/costly-oss?style=social)](https://github.com/njain006/costly-oss)
+[![Live Demo](https://img.shields.io/badge/demo-live-indigo)](https://costly.cdatainsights.com/demo)
 
-An open-source, AI-powered cost intelligence platform for data teams. Connect 15+ platforms — warehouses, pipelines, BI tools, AI APIs, CI/CD — and see every dollar your data stack costs in one dashboard.
+**One AI agent for your Claude, GPT, dbt, warehouse, and cloud bills.** Connect 15+ platforms in minutes, ask questions in plain English, catch spikes before they become surprise bills. MIT licensed. Self-host in 10 minutes — or use the hosted cloud.
+
+```bash
+git clone https://github.com/njain006/costly-oss && cd costly-oss
+cp backend/.env.example backend/.env   # add your LLM API key
+docker compose up -d                    # open http://localhost:3000
+```
 
 ## What it does
 
-- **Unified cost dashboard** — single pane of glass across all connected platforms
-- **AI cost agent** — ask questions about your spend in natural language (15+ tools, platform-specific expert knowledge)
-- **Anomaly detection** — automatic spike detection with Z-score, day-over-day, and week-over-week analysis
-- **Optimization recommendations** — actionable insights with projected dollar savings
-- **Custom pricing** — plug in your negotiated rates (Snowflake credits, AWS EDP, per-model AI pricing)
-- **AI Spend Intelligence** — cross-provider AI cost dashboard (OpenAI vs Anthropic vs Gemini) with token breakdowns, model-level costs, and migration recommendations
-- **Per-platform deep dives** — warehouse sizing, query patterns, storage analysis, cost attribution
+- **AI cost agent** — ask "why did our Claude spend spike last week?" or "which dbt models cost the most?" and get cited answers across every connected platform.
+- **Claude / GPT / Gemini cost attribution** — per-model, per-workspace, per-service-tier breakdowns; cache-hit-rate visibility; token-layer split (cached-read vs cache-write vs input vs output).
+- **Unified cost dashboard** — single pane of glass for AI APIs, pipelines, warehouses, BI, CI/CD, and cloud.
+- **Anomaly detection** — Z-score + day-over-day + week-over-week spike detection with Slack / email alerts.
+- **Optimization recommendations** — actionable insights with projected dollar savings.
+- **Open connector layer** — MIT-licensed, read-only. Audit exactly what we query.
 
 ## Supported Platforms
 
 | Category | Platforms |
 |----------|-----------|
-| **Warehouses** | Snowflake, BigQuery, Databricks |
-| **Cloud** | AWS (21 services) |
+| **AI &amp; LLM APIs** | Anthropic (Claude), OpenAI, Gemini/Vertex AI |
 | **Pipelines** | dbt Cloud, Fivetran, Airbyte |
-| **BI & Analytics** | Looker, Tableau, Omni |
-| **AI & ML** | OpenAI, Anthropic, Gemini/Vertex AI |
+| **BI &amp; Analytics** | Looker, Tableau, Omni |
+| **Warehouses** | BigQuery, Databricks, Snowflake |
+| **Cloud** | AWS (21 services) |
 | **CI/CD** | GitHub Actions, GitLab CI |
 | **Data Quality** | Monte Carlo |
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.svg)
-
-![Data Flow](docs/data-flow.svg)
-
-## Connector Permissions
-
-Every connector uses **read-only** access. Here's exactly what each one needs:
-
-| Platform | Credential Type | Permissions Required | What It Reads |
-|----------|----------------|---------------------|---------------|
-| **Snowflake** | RSA key-pair | `IMPORTED PRIVILEGES` on `SNOWFLAKE` database | Warehouse credits, query history, storage, load history |
-| **AWS** | IAM access key | `ce:GetCostAndUsage`, `s3:ListBuckets`, `ec2:DescribeInstances`, `lambda:ListFunctions` | Cost Explorer (21 services), S3/EC2/Lambda inventory |
-| **dbt Cloud** | API token (Admin) | Read access to runs, jobs | Job runs, durations, model counts per run |
-| **OpenAI** | API key (Org admin) | Organization usage read | Token usage by model, daily costs |
-| **Anthropic** | Admin API key | Organization usage read | Token usage by model (input/output), daily costs |
-| **Fivetran** | API key + secret | Read access to groups, connectors | MAR (monthly active rows), sync frequency, connector costs |
-| **BigQuery** | Service account JSON | `bigquery.jobs.list`, `bigquery.tables.list` | Bytes scanned, slot usage, storage by dataset |
-| **Databricks** | Personal access token | Account-level billing read | DBU usage by SKU (SQL, DLT, interactive, ML) |
-| **Gemini** | API key or service account | AI Studio / Cloud Monitoring read | Request counts, model usage |
-| **Looker** | Client ID + secret | Admin API read | Query counts, PDT builds, user activity |
-| **Tableau** | PAT name + secret | Site admin read | User seats, view counts, extract refreshes |
-| **GitHub Actions** | PAT (classic) | `repo`, `read:org` | Workflow minutes by OS, repo, runner type |
-| **GitLab CI** | PAT | `read_api` | Pipeline durations, job counts per project |
-| **Airbyte** | API token | Read access | Sync volumes (bytes/rows), connection durations |
-| **Monte Carlo** | API key + ID | GraphQL read | Tables monitored, incidents, data quality metrics |
-| **Omni** | API key | Read access | User counts, query volumes |
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Next.js 15 │────▶│  FastAPI     │────▶│  MongoDB 7   │
+│  Frontend   │     │  Backend     │     │              │
+└─────────────┘     └──────┬───────┘     └──────────────┘
+                           │
+                    ┌──────┴───────┐     ┌──────────────┐
+                    │  AI Agent    │     │  Redis 7     │
+                    │  (15+ tools) │     │  (cache)     │
+                    └──────┬───────┘     └──────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+    Anthropic           dbt Cloud          AWS
+    OpenAI              Fivetran           BigQuery
+    Gemini              Airbyte            Snowflake
+         ...              ...                ...
+```
 
 ## Tech Stack
 
@@ -79,9 +78,7 @@ Every connector uses **read-only** access. Here's exactly what each one needs:
 
 ```bash
 git clone https://github.com/njain006/costly-oss.git
-cd costly-oss  # rename if you prefer
-# or: git clone https://github.com/njain006/costly-oss.git costly
-cd costly
+cd costly-oss
 
 # Copy example env and fill in your values
 cp backend/.env.example backend/.env

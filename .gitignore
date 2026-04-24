@@ -46,3 +46,8 @@ backend/server.py
 
 # Claude agent configs (may contain deployment details)
 .claude/agents/
+
+# Coverage artifacts
+.coverage
+backend/.coverage
+htmlcov/

@@ -14,6 +14,7 @@ class PlatformType(str, Enum):
     airbyte = "airbyte"
     databricks = "databricks"
     anthropic = "anthropic"
+    claude_code = "claude_code"
     openai = "openai"
     gemini = "gemini"
     confluent = "confluent"

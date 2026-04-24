@@ -1,0 +1,24 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709337600,
+      "end_time": 1709424000,
+      "results": [
+        {
+          "object": "organization.usage.completions.result",
+          "model": "gpt-4o",
+          "project_id": "proj_alpha",
+          "input_tokens": 200000,
+          "input_cached_tokens": 0,
+          "output_tokens": 80000,
+          "num_model_requests": 9,
+          "batch": false
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

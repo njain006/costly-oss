@@ -20,7 +20,11 @@ import {
   Cloud,
   Cpu,
   Sparkles,
+  Github,
+  Star,
 } from "lucide-react";
+
+const GITHUB_REPO_URL = "https://github.com/njain006/costly-oss";
 
 /* ---------- data ---------- */
 
@@ -31,22 +35,22 @@ const HERO_STATS = [
 ];
 
 const PLATFORMS = [
-  { name: "Snowflake", category: "Warehouse", color: "sky" },
+  { name: "Anthropic", category: "AI", color: "rose" },
+  { name: "OpenAI", category: "AI", color: "green" },
+  { name: "Gemini", category: "AI", color: "purple" },
+  { name: "dbt Cloud", category: "Transform", color: "emerald" },
+  { name: "AWS", category: "Cloud", color: "amber" },
   { name: "BigQuery", category: "Warehouse", color: "blue" },
   { name: "Databricks", category: "Compute", color: "orange" },
-  { name: "AWS", category: "Cloud", color: "amber" },
-  { name: "dbt Cloud", category: "Transform", color: "emerald" },
-  { name: "Fivetran", category: "Ingest", color: "violet" },
-  { name: "Airbyte", category: "Ingest", color: "cyan" },
-  { name: "OpenAI", category: "AI", color: "green" },
-  { name: "Anthropic", category: "AI", color: "rose" },
-  { name: "Gemini", category: "AI", color: "purple" },
+  { name: "Snowflake", category: "Warehouse", color: "sky" },
   { name: "Looker", category: "BI", color: "indigo" },
   { name: "Tableau", category: "BI", color: "blue" },
+  { name: "Omni", category: "BI", color: "violet" },
+  { name: "Fivetran", category: "Ingest", color: "violet" },
+  { name: "Airbyte", category: "Ingest", color: "cyan" },
   { name: "GitHub Actions", category: "CI/CD", color: "slate" },
   { name: "GitLab CI", category: "CI/CD", color: "orange" },
   { name: "Monte Carlo", category: "Quality", color: "teal" },
-  { name: "Omni", category: "BI", color: "violet" },
 ];
 
 const FEATURES = [
@@ -54,6 +58,8 @@ const FEATURES = [
     icon: BarChart3,
     tag: "Dashboard",
     title: "Unified Cost Dashboard",
+    tagColor: "text-indigo-400 bg-indigo-50",
+    iconColor: "bg-indigo-50 text-indigo-500",
     description:
       "See every dollar across your entire data stack in one place. Break down spend by platform, team, pipeline, and time — no more switching between billing consoles.",
   },
@@ -61,20 +67,26 @@ const FEATURES = [
     icon: Bot,
     tag: "AI",
     title: "AI Cost Agent",
+    tagColor: "text-violet-400 bg-violet-50",
+    iconColor: "bg-violet-50 text-violet-500",
     description:
       "Ask questions in plain English. \u201cWhy did our AWS bill spike last Tuesday?\u201d or \u201cWhich dbt models are most expensive?\u201d — get instant, cited answers.",
   },
   {
     icon: Sparkles,
     tag: "Intelligence",
-    title: "Smart Recommendations",
+    title: "AI Spend Intelligence",
+    tagColor: "text-amber-500 bg-amber-50",
+    iconColor: "bg-amber-50 text-amber-500",
     description:
-      "Automatically surface right-sizing opportunities, idle resources, and redundant workloads. Every recommendation shows projected savings before you act.",
+      "Cross-provider AI cost dashboard — compare OpenAI vs Anthropic vs Gemini. Token breakdowns, model-level costs, and migration recommendations.",
   },
   {
     icon: Database,
     tag: "Connectors",
     title: "Open-Source Connector Layer",
+    tagColor: "text-emerald-500 bg-emerald-50",
+    iconColor: "bg-emerald-50 text-emerald-500",
     description:
       "15 connectors for warehouses, pipelines, BI tools, AI models, and CI/CD. Read-only credentials. No agents or data extraction — we query APIs directly.",
   },
@@ -82,6 +94,8 @@ const FEATURES = [
     icon: AlertTriangle,
     tag: "Monitoring",
     title: "Anomaly Detection",
+    tagColor: "text-rose-500 bg-rose-50",
+    iconColor: "bg-rose-50 text-rose-500",
     description:
       "Catch cost spikes before they become surprise bills. Rolling-average baselines with per-platform thresholds alert you the moment something looks off.",
   },
@@ -89,6 +103,8 @@ const FEATURES = [
     icon: Bell,
     tag: "Alerts",
     title: "Budget Alerts",
+    tagColor: "text-cyan-500 bg-cyan-50",
+    iconColor: "bg-cyan-50 text-cyan-500",
     description:
       "Set daily, weekly, or monthly budget thresholds per platform or team. Get notified via Slack or email before you exceed targets.",
   },
@@ -120,34 +136,40 @@ const HOW_IT_WORKS = [
 
 const PLATFORM_CATEGORIES = [
   {
-    icon: Cloud,
-    label: "Data Warehouses",
-    platforms: "Snowflake, BigQuery, Databricks",
+    icon: Cpu,
+    label: "AI & LLM APIs",
+    platforms: "Claude, OpenAI, Gemini",
+    color: "bg-violet-50 text-violet-500",
   },
   {
     icon: GitBranch,
     label: "Pipelines & Transforms",
     platforms: "dbt Cloud, Fivetran, Airbyte",
+    color: "bg-emerald-50 text-emerald-500",
   },
   {
     icon: BarChart3,
     label: "BI & Analytics",
     platforms: "Looker, Tableau, Omni",
+    color: "bg-indigo-50 text-indigo-500",
   },
   {
-    icon: Cpu,
-    label: "AI & ML APIs",
-    platforms: "OpenAI, Anthropic, Gemini",
+    icon: Cloud,
+    label: "Data Warehouses",
+    platforms: "BigQuery, Databricks, Snowflake",
+    color: "bg-blue-50 text-blue-500",
   },
   {
     icon: Zap,
-    label: "CI/CD & Infra",
+    label: "CI/CD & Cloud",
     platforms: "GitHub Actions, GitLab CI, AWS",
+    color: "bg-amber-50 text-amber-600",
   },
   {
     icon: Shield,
     label: "Data Quality",
     platforms: "Monte Carlo",
+    color: "bg-teal-50 text-teal-500",
   },
 ];
 
@@ -156,21 +178,25 @@ const TRUST_ITEMS = [
     icon: Shield,
     title: "100% read-only",
     description: "We never write to your platforms. No risk of data modification.",
+    color: "bg-emerald-50 text-emerald-500",
   },
   {
     icon: Clock,
     title: "5-minute setup",
     description: "Paste a credential, see data. No agents, no ETL, no infrastructure.",
+    color: "bg-indigo-50 text-indigo-500",
   },
   {
     icon: Database,
     title: "No data extraction",
     description: "We query billing APIs directly. Your data never leaves your accounts.",
+    color: "bg-violet-50 text-violet-500",
   },
   {
     icon: TrendingDown,
     title: "Open connector layer",
     description: "All 15 connectors are open source. Audit exactly what we query.",
+    color: "bg-amber-50 text-amber-500",
   },
 ];
 
@@ -201,7 +227,7 @@ export default function LandingPage() {
           href="/"
           className="flex items-center gap-2 text-lg font-extrabold text-white tracking-tight"
         >
-          <DollarSign className="h-5 w-5 text-sky-400" />
+          <DollarSign className="h-5 w-5 text-emerald-400" />
           costly
         </Link>
         <div className="hidden md:flex gap-6 items-center">
@@ -223,6 +249,16 @@ export default function LandingPage() {
           >
             Docs
           </Link>
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-slate-400 text-sm hover:text-white transition"
+            aria-label="Star costly on GitHub"
+          >
+            <Github className="h-4 w-4" />
+            <span className="hidden lg:inline">GitHub</span>
+          </a>
           <Link
             href="/login"
             className="px-4 py-1.5 border border-white/20 rounded-md text-slate-200 text-sm font-medium hover:border-white/40 transition"
@@ -231,7 +267,7 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/login"
-            className="px-4 py-1.5 bg-sky-600 rounded-md text-white text-sm font-semibold hover:bg-sky-700 transition"
+            className="px-4 py-1.5 bg-indigo-600 rounded-md text-white text-sm font-semibold hover:bg-indigo-700 transition"
           >
             Get Started
           </Link>
@@ -248,48 +284,51 @@ export default function LandingPage() {
               "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
           }}
         />
-        {/* radial glow */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-sky-600/10 blur-[100px] rounded-full pointer-events-none" />
+        {/* radial glow — warm indigo instead of sky */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-600/10 blur-[100px] rounded-full pointer-events-none" />
 
         <div className="relative max-w-5xl mx-auto px-6 text-center">
           {/* Eyebrow */}
-          <div className="inline-flex items-center gap-2 bg-sky-500/10 border border-sky-500/25 rounded-full px-4 py-1.5 text-xs text-sky-400 font-semibold uppercase tracking-wider mb-6">
-            <Sparkles className="h-3.5 w-3.5" />
-            Multi-Platform Data Cost Intelligence
+          <div className="inline-flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/25 rounded-full px-4 py-1.5 text-xs text-indigo-300 font-semibold uppercase tracking-wider mb-6">
+            <Github className="h-3.5 w-3.5" />
+            Open Source · MIT · Self-Hostable
           </div>
 
           {/* Headline */}
           <h1 className="text-4xl sm:text-5xl md:text-[3.75rem] font-extrabold text-white tracking-tight leading-[1.1] mb-6">
             See every dollar your
             <br />
-            <span className="bg-gradient-to-r from-sky-400 to-cyan-400 bg-clip-text text-transparent">
-              data stack costs
+            <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-purple-400 bg-clip-text text-transparent">
+              AI and data stack costs
             </span>
           </h1>
 
           {/* Sub-headline */}
           <p className="text-lg md:text-xl text-slate-400 max-w-2xl mx-auto leading-relaxed mb-10">
-            One dashboard for warehouses, pipelines, BI tools, AI models, and CI/CD.
-            Connect 15+ platforms in minutes — then let AI find where you&apos;re
-            overspending.
+            An open-source AI agent for your Claude, GPT, dbt, warehouse, and
+            cloud bills. Connect 15+ platforms in minutes — self-host in 10, or
+            use our cloud.
           </p>
 
           {/* CTAs */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
             <Link
               href="/demo"
-              className="px-8 py-3.5 bg-sky-600 rounded-lg text-white text-base font-bold hover:bg-sky-700 transition shadow-lg shadow-sky-500/30 flex items-center gap-2"
+              className="px-8 py-3.5 bg-indigo-600 rounded-lg text-white text-base font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-500/30 flex items-center gap-2"
             >
               <Eye className="h-4 w-4" />
               Try Live Demo
             </Link>
-            <Link
-              href="/login"
-              className="px-8 py-3.5 border border-slate-700 rounded-lg text-slate-300 text-base font-medium hover:bg-slate-800/50 transition flex items-center gap-2"
+            <a
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-8 py-3.5 border border-slate-700 rounded-lg text-slate-200 text-base font-medium hover:bg-slate-800/50 hover:border-slate-600 transition flex items-center gap-2"
             >
-              Get Started Free
-              <ArrowRight className="h-4 w-4" />
-            </Link>
+              <Star className="h-4 w-4" />
+              Star on GitHub
+              <ArrowRight className="h-4 w-4 opacity-60" />
+            </a>
           </div>
 
           {/* Hero stats */}
@@ -312,7 +351,7 @@ export default function LandingPage() {
       <section className="bg-[#0B1929] pb-20">
         <div className="relative max-w-5xl mx-auto px-6">
           <Link href="/demo" className="block group">
-            <div className="rounded-xl border border-slate-700/60 bg-slate-900/80 shadow-2xl shadow-sky-500/10 overflow-hidden group-hover:border-sky-500/40 group-hover:shadow-sky-500/20 transition-all">
+            <div className="rounded-xl border border-slate-700/60 bg-slate-900/80 shadow-2xl shadow-indigo-500/5 overflow-hidden group-hover:border-indigo-500/40 group-hover:shadow-indigo-500/15 transition-all">
               <div className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800/80 border-b border-slate-700/50">
                 <div className="w-3 h-3 rounded-full bg-red-500/60" />
                 <div className="w-3 h-3 rounded-full bg-amber-500/60" />
@@ -320,7 +359,7 @@ export default function LandingPage() {
                 <span className="ml-3 text-xs text-slate-500 font-mono">
                   costly — Overview
                 </span>
-                <span className="ml-auto text-xs text-sky-400 font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                <span className="ml-auto text-xs text-indigo-400 font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                   <Eye className="h-3 w-3" />
                   Click to try live demo
                 </span>
@@ -329,10 +368,10 @@ export default function LandingPage() {
                 {/* Mock top metrics */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                   {[
-                    { label: "Total MTD Spend", value: "$38,420", trend: "-11%", good: true },
-                    { label: "Platforms Connected", value: "8", trend: "Active", good: true },
-                    { label: "AI Recommendations", value: "12", trend: "New", good: true },
-                    { label: "Projected Savings", value: "$9,840/mo", trend: "15 actions", good: true },
+                    { label: "Total MTD Spend", value: "$38,420", trend: "-11%", color: "text-emerald-400" },
+                    { label: "Platforms Connected", value: "8", trend: "Active", color: "text-indigo-400" },
+                    { label: "AI Recommendations", value: "12", trend: "New", color: "text-violet-400" },
+                    { label: "Projected Savings", value: "$9,840/mo", trend: "15 actions", color: "text-amber-400" },
                   ].map((m) => (
                     <div
                       key={m.label}
@@ -340,7 +379,7 @@ export default function LandingPage() {
                     >
                       <div className="text-xs text-slate-500 mb-1">{m.label}</div>
                       <div className="text-xl font-bold text-white">{m.value}</div>
-                      <div className="text-xs mt-1 font-medium text-emerald-400">
+                      <div className={`text-xs mt-1 font-medium ${m.color}`}>
                         {m.trend}
                       </div>
                     </div>
@@ -351,10 +390,10 @@ export default function LandingPage() {
                   <div className="bg-slate-800/30 rounded-lg border border-slate-700/20 p-4">
                     <div className="text-xs text-slate-500 mb-3 font-medium">Spend by Platform (MTD)</div>
                     {[
-                      { name: "Snowflake", pct: 78, val: "$18.2K", color: "bg-sky-500" },
-                      { name: "AWS", pct: 52, val: "$12.1K", color: "bg-amber-500" },
-                      { name: "Databricks", pct: 28, val: "$6.5K", color: "bg-orange-500" },
-                      { name: "dbt Cloud", pct: 8, val: "$1.6K", color: "bg-emerald-500" },
+                      { name: "Anthropic", pct: 72, val: "$14.2K", color: "bg-rose-500" },
+                      { name: "AWS", pct: 61, val: "$12.1K", color: "bg-amber-500" },
+                      { name: "OpenAI", pct: 34, val: "$6.8K", color: "bg-emerald-500" },
+                      { name: "dbt Cloud", pct: 18, val: "$3.5K", color: "bg-violet-500" },
                     ].map((p) => (
                       <div key={p.name} className="flex items-center gap-3 mb-2">
                         <div className="text-xs text-slate-400 w-24 shrink-0">{p.name}</div>
@@ -372,7 +411,7 @@ export default function LandingPage() {
                         (h, i) => (
                           <div
                             key={i}
-                            className="flex-1 bg-gradient-to-t from-sky-600 to-sky-400 rounded-t-sm opacity-70"
+                            className="flex-1 bg-gradient-to-t from-indigo-600 to-violet-400 rounded-t-sm opacity-70"
                             style={{ height: `${h}%` }}
                           />
                         )
@@ -415,7 +454,7 @@ export default function LandingPage() {
       <section className="px-6 py-20 bg-[#FAFBFC]">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
-            <div className="inline-block bg-sky-500/10 border border-sky-500/20 rounded-full px-4 py-1 text-xs text-sky-500 font-semibold uppercase tracking-wider mb-4">
+            <div className="inline-block bg-indigo-500/10 border border-indigo-500/20 rounded-full px-4 py-1 text-xs text-indigo-500 font-semibold uppercase tracking-wider mb-4">
               Coverage
             </div>
             <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">
@@ -426,13 +465,13 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-5">
-            {PLATFORM_CATEGORIES.map(({ icon: Icon, label, platforms }) => (
+            {PLATFORM_CATEGORIES.map(({ icon: Icon, label, platforms, color }) => (
               <div
                 key={label}
-                className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:border-sky-200 hover:shadow-md hover:shadow-sky-500/5 transition-all"
+                className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:border-indigo-200 hover:shadow-md hover:shadow-indigo-500/5 transition-all"
               >
-                <div className="h-9 w-9 rounded-lg bg-sky-50 flex items-center justify-center mb-3">
-                  <Icon className="h-4.5 w-4.5 text-sky-500 h-5 w-5" />
+                <div className={`h-9 w-9 rounded-lg ${color.split(" ")[0]} flex items-center justify-center mb-3`}>
+                  <Icon className={`h-5 w-5 ${color.split(" ")[1]}`} />
                 </div>
                 <div className="font-bold text-slate-900 text-sm mb-1">{label}</div>
                 <div className="text-xs text-slate-500">{platforms}</div>
@@ -446,7 +485,7 @@ export default function LandingPage() {
       <section id="features" className="scroll-mt-20 px-6 py-20 bg-[#FAFBFC] border-t border-slate-200">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-14">
-            <div className="inline-block bg-sky-500/10 border border-sky-500/20 rounded-full px-4 py-1 text-xs text-sky-500 font-semibold uppercase tracking-wider mb-4">
+            <div className="inline-block bg-violet-500/10 border border-violet-500/20 rounded-full px-4 py-1 text-xs text-violet-500 font-semibold uppercase tracking-wider mb-4">
               Platform Capabilities
             </div>
             <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">
@@ -459,18 +498,18 @@ export default function LandingPage() {
           </div>
 
           <div className="grid md:grid-cols-2 gap-6">
-            {FEATURES.map(({ icon: Icon, tag, title, description }) => (
+            {FEATURES.map(({ icon: Icon, tag, title, description, tagColor, iconColor }) => (
               <div
                 key={title}
-                className="group rounded-xl border border-slate-200 bg-white p-6 hover:border-sky-200 hover:shadow-md hover:shadow-sky-500/5 transition-all"
+                className="group rounded-xl border border-slate-200 bg-white p-6 hover:border-indigo-200 hover:shadow-md hover:shadow-indigo-500/5 transition-all"
               >
                 <div className="flex items-start gap-4">
-                  <div className="h-10 w-10 shrink-0 rounded-lg bg-sky-50 flex items-center justify-center">
-                    <Icon className="h-5 w-5 text-sky-500" />
+                  <div className={`h-10 w-10 shrink-0 rounded-lg ${iconColor.split(" ")[0]} flex items-center justify-center`}>
+                    <Icon className={`h-5 w-5 ${iconColor.split(" ")[1]}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-[0.65rem] font-bold uppercase tracking-wider text-sky-400 bg-sky-50 px-2 py-0.5 rounded">
+                      <span className={`text-[0.65rem] font-bold uppercase tracking-wider ${tagColor} px-2 py-0.5 rounded`}>
                         {tag}
                       </span>
                     </div>
@@ -506,11 +545,11 @@ export default function LandingPage() {
             {HOW_IT_WORKS.map(({ step, icon: Icon, title, description }) => (
               <div key={step} className="relative">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="text-4xl font-extrabold text-sky-800 leading-none">
+                  <div className="text-4xl font-extrabold text-indigo-900 leading-none">
                     {step}
                   </div>
-                  <div className="h-8 w-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center">
-                    <Icon className="h-4 w-4 text-sky-400" />
+                  <div className="h-8 w-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+                    <Icon className="h-4 w-4 text-indigo-400" />
                   </div>
                 </div>
                 <h3 className="text-base font-bold text-white mb-2">{title}</h3>
@@ -568,9 +607,9 @@ export default function LandingPage() {
               <div className="p-5 space-y-4">
                 {/* User message */}
                 <div className="flex justify-end">
-                  <div className="bg-sky-600 rounded-xl rounded-tr-sm px-4 py-2.5 max-w-[80%]">
+                  <div className="bg-indigo-600 rounded-xl rounded-tr-sm px-4 py-2.5 max-w-[80%]">
                     <p className="text-sm text-white">
-                      Why did our data platform costs spike last week?
+                      Why did our Claude spend spike last week?
                     </p>
                   </div>
                 </div>
@@ -582,11 +621,11 @@ export default function LandingPage() {
                       <span className="text-[0.65rem] font-semibold text-violet-400 uppercase tracking-wider">costly AI</span>
                     </div>
                     <p className="text-sm text-slate-300 leading-relaxed mb-2">
-                      Your total spend increased <span className="text-amber-400 font-semibold">+43%</span> Mon–Thu vs. the prior week. The drivers were <span className="text-sky-400 font-semibold">warehouse compute</span> (+$2.1K from a dbt full-refresh retry loop) and <span className="text-sky-400 font-semibold">AWS data transfer</span> (+$840 from cross-region replication).
+                      Anthropic spend jumped <span className="text-amber-400 font-semibold">+58%</span> Mon–Thu. The driver is a <span className="text-rose-400 font-semibold">prompt-caching regression</span> — cache-hit rate fell from <span className="text-emerald-400 font-semibold">71%</span> to <span className="text-rose-400 font-semibold">12%</span> on your <code className="text-violet-300">sales-agent</code> workflow after last Tuesday&apos;s deploy. An extra 41M cache-write tokens cost <span className="text-amber-400 font-semibold">+$2.1K</span>.
                     </p>
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700/40">
                       <div className="text-[0.65rem] text-emerald-400 font-medium bg-emerald-500/10 border border-emerald-500/20 rounded px-2 py-0.5">
-                        Recommendation: Add dbt on-run-end alert → estimated $420 saved/mo
+                        Recommendation: Restore cache-friendly system prompt → est. $1,400/mo saved
                       </div>
                     </div>
                   </div>
@@ -609,13 +648,13 @@ export default function LandingPage() {
             </h2>
           </div>
           <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-5">
-            {TRUST_ITEMS.map(({ icon: Icon, title, description }) => (
+            {TRUST_ITEMS.map(({ icon: Icon, title, description, color }) => (
               <div
                 key={title}
                 className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm text-center"
               >
-                <div className="h-10 w-10 rounded-lg bg-emerald-50 flex items-center justify-center mx-auto mb-3">
-                  <Icon className="h-5 w-5 text-emerald-500" />
+                <div className={`h-10 w-10 rounded-lg ${color.split(" ")[0]} flex items-center justify-center mx-auto mb-3`}>
+                  <Icon className={`h-5 w-5 ${color.split(" ")[1]}`} />
                 </div>
                 <div className="font-bold text-slate-900 text-sm mb-1.5">{title}</div>
                 <div className="text-xs text-slate-500 leading-relaxed">{description}</div>
@@ -641,12 +680,12 @@ export default function LandingPage() {
           </div>
           <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
             {[
-              { area: "Warehouse compute & storage", platforms: "Snowflake, BigQuery, Databricks" },
+              { area: "AI & LLM API spend (per model, cache, service tier)", platforms: "Claude, OpenAI, Gemini" },
+              { area: "Transformation runs (per model, per project)", platforms: "dbt Cloud" },
+              { area: "Cloud infrastructure (21 services)", platforms: "AWS" },
+              { area: "Warehouse compute & storage", platforms: "BigQuery, Databricks, Snowflake" },
               { area: "Data ingestion pipelines", platforms: "Fivetran, Airbyte" },
-              { area: "Transformation runs", platforms: "dbt Cloud" },
               { area: "BI tool licensing & usage", platforms: "Looker, Tableau, Omni" },
-              { area: "AI & LLM API spend", platforms: "OpenAI, Anthropic, Gemini" },
-              { area: "Cloud infrastructure", platforms: "AWS (21 services)" },
               { area: "CI/CD pipeline minutes", platforms: "GitHub Actions, GitLab CI" },
               { area: "Data quality monitoring", platforms: "Monte Carlo" },
             ].map(({ area, platforms }, i) => (
@@ -673,7 +712,7 @@ export default function LandingPage() {
 
       {/* ── Bottom CTA ── */}
       <section className="px-6 py-24 bg-[#0B1929] text-center relative overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-sky-600/10 blur-[80px] rounded-full pointer-events-none" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-600/10 blur-[80px] rounded-full pointer-events-none" />
         <div className="relative max-w-2xl mx-auto">
           <h2 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight mb-4">
             Your data stack has one bill now.
@@ -685,7 +724,7 @@ export default function LandingPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/demo"
-              className="px-10 py-3.5 bg-sky-600 text-white rounded-lg text-base font-bold hover:bg-sky-700 transition shadow-lg shadow-sky-500/30 flex items-center gap-2"
+              className="px-10 py-3.5 bg-indigo-600 text-white rounded-lg text-base font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-500/30 flex items-center gap-2"
             >
               <Eye className="h-4 w-4" />
               Try Live Demo
@@ -707,7 +746,7 @@ export default function LandingPage() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 text-white font-extrabold mb-3">
-                <DollarSign className="h-4 w-4 text-sky-400" />
+                <DollarSign className="h-4 w-4 text-emerald-400" />
                 costly
               </div>
               <p className="text-sm text-slate-500 leading-relaxed">
@@ -745,7 +784,7 @@ export default function LandingPage() {
                 Connectors
               </div>
               <div className="space-y-2">
-                {["Snowflake", "BigQuery", "Databricks", "AWS", "dbt Cloud"].map((p) => (
+                {["Anthropic", "OpenAI", "dbt Cloud", "AWS", "BigQuery"].map((p) => (
                   <span key={p} className="block text-sm text-slate-500">{p}</span>
                 ))}
               </div>
@@ -776,8 +815,18 @@ export default function LandingPage() {
               </div>
             </div>
           </div>
-          <div className="border-t border-slate-800/60 pt-6 text-center text-xs text-slate-600">
-            costly &mdash; Data Cost Intelligence Platform
+          <div className="border-t border-slate-800/60 pt-6 flex flex-col sm:flex-row items-center justify-center gap-3 text-xs text-slate-600">
+            <span>costly &mdash; Open-source AI &amp; Data Cost Intelligence</span>
+            <span className="hidden sm:inline">·</span>
+            <a
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 hover:text-slate-400 transition"
+            >
+              <Github className="h-3.5 w-3.5" />
+              github.com/njain006/costly-oss
+            </a>
           </div>
         </div>
       </footer>

@@ -29,6 +29,7 @@ def _can_import(module: str) -> bool:
 CONNECTOR_CLASSES = [
     ("app.services.connectors.aws_connector", "AWSConnector", "aws"),
     ("app.services.connectors.anthropic_connector", "AnthropicConnector", "anthropic"),
+    ("app.services.connectors.claude_code_connector", "ClaudeCodeConnector", "claude_code"),
     ("app.services.connectors.dbt_cloud_connector", "DbtCloudConnector", "dbt_cloud"),
     ("app.services.connectors.openai_connector", "OpenAIConnector", "openai"),
     ("app.services.connectors.fivetran_connector", "FivetranConnector", "fivetran"),

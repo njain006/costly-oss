@@ -1,0 +1,23 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.usage.images.result",
+          "model": "dall-e-3",
+          "project_id": "proj_alpha",
+          "size": "1024x1024",
+          "source": "image.generation",
+          "images": 25,
+          "num_model_requests": 25
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

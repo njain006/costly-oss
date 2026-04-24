@@ -1,0 +1,21 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.usage.audio_transcriptions.result",
+          "model": "whisper-1",
+          "project_id": "proj_alpha",
+          "seconds": 3600,
+          "num_model_requests": 15
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

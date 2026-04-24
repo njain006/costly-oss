@@ -1,0 +1,32 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.costs.result",
+          "amount": {"value": 12.345678, "currency": "usd"},
+          "line_item": "gpt-4o, input",
+          "project_id": "proj_alpha"
+        },
+        {
+          "object": "organization.costs.result",
+          "amount": {"value": 7.5, "currency": "usd"},
+          "line_item": "gpt-4o, output",
+          "project_id": "proj_alpha"
+        },
+        {
+          "object": "organization.costs.result",
+          "amount": {"value": 3.25, "currency": "usd"},
+          "line_item": "gpt-5-mini, total",
+          "project_id": "proj_beta"
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

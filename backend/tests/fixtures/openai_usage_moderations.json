@@ -1,0 +1,21 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.usage.moderations.result",
+          "model": "omni-moderation-latest",
+          "project_id": "proj_alpha",
+          "input_tokens": 500000,
+          "num_model_requests": 2000
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

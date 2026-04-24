@@ -1,0 +1,19 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1709251200,
+      "end_time": 1709337600,
+      "results": [
+        {
+          "object": "organization.usage.vector_stores.result",
+          "project_id": "proj_alpha",
+          "usage_bytes": 10737418240
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

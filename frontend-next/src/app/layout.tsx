@@ -7,20 +7,23 @@ import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
+const SITE_TITLE = "Costly — Open-source AI & Data Cost Intelligence";
+const SITE_DESCRIPTION = "Open-source AI agent for your Claude, GPT, dbt, warehouse, and cloud bills. Connect 15+ platforms in minutes. MIT licensed, self-hostable, or use our cloud.";
+
 export const metadata: Metadata = {
-  title: "Costly — AI-Powered Data Platform Cost Intelligence",
-  description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms. Connect read-only, get optimization recommendations in minutes.",
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
   openGraph: {
-    title: "Costly — AI-Powered Data Platform Cost Intelligence",
-    description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms. Connect read-only, get optimization recommendations in minutes.",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
     url: "https://costly.cdatainsights.com",
     siteName: "Costly",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Costly — AI-Powered Data Platform Cost Intelligence",
-    description: "AI expert agents that find waste across Snowflake, AWS, Databricks, dbt Cloud, and 15+ platforms.",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
   },
 };
 
