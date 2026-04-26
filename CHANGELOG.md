@@ -4,6 +4,23 @@ All notable changes to Costly are documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/) once a first tagged release is cut. Until then, dates are the canonical ordering.
 
+## 1.0.0 (2026-04-26)
+
+
+### Features
+
+* AI + data repositioning, 6 connector overhauls, Claude Code, 22 research docs ([7931a35](https://github.com/njain006/costly-oss/commit/7931a35c136bb0224a8d9b41ab5f768c19d552bf))
+* expert agents system, enhanced overview, expanded platform views ([76e540b](https://github.com/njain006/costly-oss/commit/76e540bf2f8d160373d86062f60fee72438bd9d0))
+* multi-AWS account support + API test suite ([#1](https://github.com/njain006/costly-oss/issues/1)) ([5370a5b](https://github.com/njain006/costly-oss/commit/5370a5ba44295a8259674336586bdfce16a04498))
+* sync 9 connector + UI lanes from production (Apr 24-26) ([4ebf161](https://github.com/njain006/costly-oss/commit/4ebf161627afe21f3a58735d284897e137cb97fd))
+* update meta tags + make pricing page free-only ([8e57b26](https://github.com/njain006/costly-oss/commit/8e57b26bacd07300305b1136ef038b9ff1f71d77))
+
+
+### Bug Fixes
+
+* **ci:** remove duplicate frontend-build job stub from union merge ([0bddef8](https://github.com/njain006/costly-oss/commit/0bddef84436a4cc3e028714b97df4e21721b6002))
+* dbt Cloud + OpenAI connectors — pagination, pricing, failed run tracking ([ba6c05a](https://github.com/njain006/costly-oss/commit/ba6c05ab6864328cb57204d83c36dcb8b4e29279))
+
 ## [Unreleased]
 
 ### Added
