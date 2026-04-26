@@ -1,0 +1,66 @@
+name: E2E (deployed)
+
+# Read-only Playwright run against the live site at
+# https://costly.cdatainsights.com.
+#
+# - Triggers on push to main (post-deploy smoke), nightly cron, and manual
+#   dispatch.
+# - PUBLIC_ONLY=1 — any test that mutates server state must already
+#   `test.skip(IS_PUBLIC_ONLY, …)` (currently just register/login).
+# - Single chromium project for speed; the deeper webkit/mobile-chrome
+#   matrix runs in the local-stack `e2e-tests` job in `ci.yml`.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 13:00 UTC daily — well after the prod deploy window.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+jobs:
+  frontend-e2e:
+    name: Playwright against costly.cdatainsights.com
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend-next
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E against deployed site
+        run: npx playwright test
+        env:
+          BASE_URL: https://costly.cdatainsights.com
+          PUBLIC_ONLY: "1"
+          CI: "true"
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-deployed
+          path: frontend-next/playwright-report/
+          retention-days: 14
+
+      - name: Upload test-results (traces, screenshots, videos)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-deployed
+          path: frontend-next/test-results/
+          retention-days: 7
