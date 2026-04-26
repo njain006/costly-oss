@@ -1,0 +1,146 @@
+# Costly — Python tooling configuration
+#
+# This file is intentionally tooling-only. Backend dependencies still live in
+# `backend/requirements.txt` (read by Docker + CI) and the package itself is
+# not published to PyPI, so there's no `[project]` / `[build-system]` section.
+#
+# Sections below configure:
+#   - ruff   — lint + format (replaces flake8 + isort + pyupgrade + black)
+#   - black  — formatter (kept for editor integrations; ruff format is canonical)
+#   - mypy   — static type checking (advisory in CI until baseline is clean)
+#   - pytest — discovery + coverage flags (mirrors backend/pytest.ini)
+#   - coverage — Codecov-friendly XML reporter config
+
+# ─── ruff ──────────────────────────────────────────────────────
+# https://docs.astral.sh/ruff/
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["backend/app", "backend/tests"]
+extend-exclude = [
+    "backend/server.py",      # legacy monolith, kept for reference only
+    "frontend",               # legacy React+Vite frontend
+    "**/migrations/**",
+    "**/.venv/**",
+]
+
+[tool.ruff.lint]
+# Conservative starter set — focus on real bugs and modernisation, not style
+# bikeshedding. Tighten as the codebase stabilises.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes (unused imports, undefined names)
+    "W",    # pycodestyle warnings
+    "I",    # isort (import order)
+    "B",    # flake8-bugbear (likely bugs)
+    "UP",   # pyupgrade (modernise syntax)
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "PL",   # pylint subset
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line-length handled by formatter
+    "PLR0913", # too-many-arguments (FastAPI handlers legitimately have many)
+    "PLR0911", # too-many-return-statements
+    "PLR0912", # too-many-branches
+    "PLR0915", # too-many-statements
+    "PLR2004", # magic-value-comparison (noisy on test assertions)
+    "B008",    # function calls in default args (FastAPI Depends() pattern)
+    "SIM108",  # ternary preference (often less readable)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = [
+    "PLR2004",  # magic numbers are fine in tests
+    "S101",     # asserts are the whole point in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ─── black ─────────────────────────────────────────────────────
+# Kept for editor / pre-commit interop. ruff format is the actual gate.
+# https://black.readthedocs.io/
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+extend-exclude = '''
+(
+    backend/server\.py
+  | frontend/.*
+)
+'''
+
+# ─── mypy ──────────────────────────────────────────────────────
+# https://mypy.readthedocs.io/en/stable/config_file.html
+[tool.mypy]
+python_version = "3.12"
+files = ["backend/app"]
+ignore_missing_imports = true     # third-party stubs are spotty
+no_strict_optional = true         # relax until annotations are added
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+exclude = [
+    "backend/server.py",
+    "backend/tests/.*",
+    "frontend/.*",
+]
+
+# Plugins for Pydantic v2 — gives mypy real types for `BaseModel.model_dump()`,
+# `Field(...)`, etc. without needing per-model `# type: ignore`.
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ─── pytest ────────────────────────────────────────────────────
+# Mirrors backend/pytest.ini so a developer running `pytest` from the repo
+# root picks up the same config the CI uses.
+# https://docs.pytest.org/en/stable/reference/customize.html
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+# Useful default flags (devs can override per invocation):
+#   -ra   show short summary of all non-passing outcomes
+addopts = "-ra"
+
+# ─── coverage ──────────────────────────────────────────────────
+# https://coverage.readthedocs.io/
+[tool.coverage.run]
+branch = true
+source = ["backend/app"]
+omit = [
+    "backend/app/__init__.py",
+    "backend/server.py",
+    "backend/tests/*",
+]
+
+[tool.coverage.report]
+# Don't fail locally on low coverage — Codecov enforces the project policy.
+# Show missing lines in the terminal for fast diagnosis.
+show_missing = true
+skip_covered = false
+precision = 1
+# Exclude defensive scaffolding from coverage math.
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]
+
+[tool.coverage.xml]
+output = "backend/coverage.xml"
+
+[tool.coverage.html]
+directory = "backend/htmlcov"

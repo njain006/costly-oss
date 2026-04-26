@@ -1,7 +1,11 @@
 # Costly — Open-source AI &amp; Data Cost Intelligence
 
+[![CI](https://github.com/njain006/costly-oss/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/njain006/costly-oss/actions/workflows/ci.yml)
+[![Security](https://github.com/njain006/costly-oss/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/njain006/costly-oss/actions/workflows/security.yml)
+[![codecov](https://codecov.io/gh/njain006/costly-oss/branch/main/graph/badge.svg)](https://codecov.io/gh/njain006/costly-oss)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/njain006/costly-oss?style=social)](https://github.com/njain006/costly-oss)
+[![Latest release](https://img.shields.io/github/v/release/njain006/costly-oss?display_name=tag&sort=semver)](https://github.com/njain006/costly-oss/releases)
+[![GitHub stars](https://img.shields.io/github/stars/njain006/costly-oss?style=social)](https://github.com/njain006/costly-oss/stargazers)
 [![Live Demo](https://img.shields.io/badge/demo-live-indigo)](https://costly.cdatainsights.com/demo)
 
 **One AI agent for your Claude, GPT, Gemini, dbt, warehouse, BI, CI, and cloud bills.** Connect 17 platforms in minutes, ask questions in plain English, catch spikes before they become surprise bills. AI-first — not Snowflake-only. MIT licensed. Self-host in 10 minutes — or use the hosted cloud.

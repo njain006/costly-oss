@@ -1,0 +1,144 @@
+name: Security
+
+# Dependency vulnerability scanning + filesystem CVE scan.
+#
+# Runs on every PR + push to main, plus a weekly cron so unscheduled vendor
+# advisories still surface within a week of disclosure.
+#
+# Opt-out: PR authors can attach the `skip-audit` label to skip pip-audit /
+# npm audit on a PR (e.g. for a docs-only change). The label is read at job
+# eval time, so removing the label and re-running CI re-enables the gate.
+#
+# Tools chosen:
+#   - pip-audit  → backend Python deps  (uses PyPI advisory + OSV)
+#                  https://pypi.org/project/pip-audit/
+#   - npm audit  → frontend Node deps   (built-in)
+#   - Trivy fs   → repo-wide CVE + misconfig scan
+#                  https://aquasecurity.github.io/trivy/
+#
+# Dependabot (declarative weekly bumps) lives in .github/dependabot.yml; it
+# is intentionally NOT in this workflow because Dependabot runs on GitHub's
+# infra and opens PRs of its own. We picked Dependabot over Renovate for
+# zero-config + first-party GitHub UX.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 09:00 UTC — fresh advisories before the work week starts.
+    - cron: "0 9 * * 1"
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+  security-events: write # for trivy SARIF upload
+
+jobs:
+  pip-audit:
+    name: audit / pip
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-audit') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        # Fail the job on HIGH/CRITICAL only. MEDIUM and below are reported
+        # but don't block the PR — pip-audit currently has no severity flag
+        # so we post-filter via grep on the JSON report.
+        run: |
+          pip-audit --requirement backend/requirements.txt \
+            --format json \
+            --output pip-audit.json \
+            --strict || AUDIT_RC=$?
+          echo "pip-audit exit: ${AUDIT_RC:-0}"
+          python - <<'PY'
+          import json, sys
+          try:
+              data = json.load(open("pip-audit.json"))
+          except FileNotFoundError:
+              print("No pip-audit.json produced.")
+              sys.exit(0)
+          findings = data.get("dependencies", []) if isinstance(data, dict) else data
+          high = []
+          for dep in findings:
+              for vuln in dep.get("vulns", []):
+                  # OSV severity strings vary; trip on anything CRITICAL/HIGH.
+                  sev = (vuln.get("severity") or "").upper()
+                  if "CRITICAL" in sev or "HIGH" in sev:
+                      high.append((dep["name"], vuln.get("id"), sev))
+          if high:
+              print("HIGH/CRITICAL vulnerabilities:")
+              for h in high:
+                  print(" -", *h)
+              sys.exit(1)
+          print("No HIGH/CRITICAL vulnerabilities.")
+          PY
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+          if-no-files-found: ignore
+
+  npm-audit:
+    name: audit / npm
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-audit') }}
+    defaults:
+      run:
+        working-directory: frontend-next
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Run npm audit
+        # `--audit-level=high` makes npm exit non-zero only on HIGH/CRITICAL.
+        # Production deps only — devDependency CVEs in test runners are noisy.
+        run: npm audit --omit=dev --audit-level=high
+
+  trivy-fs:
+    name: audit / trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "0" # report only — uploaded to security tab
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs

@@ -1,0 +1,40 @@
+name: Reusable Node Setup
+
+# Reusable workflow that installs Node.js with npm caching, then runs `npm ci`
+# inside `frontend-next/`.
+#
+# Note on reusable workflows: each `workflow_call` runs in its own job/runner,
+# so it cannot directly hand a populated `node_modules/` to a downstream job.
+# We use it to standardise *config* (Node version, cache key, install command),
+# not to share filesystem state. Jobs that need the install must call this
+# inline at the top of their steps via `actions/setup-node` — this reusable
+# workflow is the canonical reference for which Node version + cache key we
+# use everywhere. See the main ci.yml for the inline pattern.
+#
+# Docs: https://docs.github.com/en/actions/using-workflows/reusing-workflows
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version (matches setup-node)"
+        required: false
+        type: string
+        default: "20"
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend-next
+        run: npm ci

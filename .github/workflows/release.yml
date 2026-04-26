@@ -1,0 +1,55 @@
+name: Release
+
+# Automated changelog + tag management via release-please.
+#
+# How it works:
+#   - On every push to main, release-please scans Conventional Commits since
+#     the last tag and opens (or updates) a "release PR" containing:
+#       * version bump per semver
+#       * CHANGELOG.md entries grouped by type (feat / fix / perf / ...)
+#       * release manifest update
+#   - Merging that PR cuts the tag and (optionally) creates a GitHub Release.
+#
+# Why release-please vs auto-changelog vs semantic-release:
+#   - release-please is GitHub-native, requires no node toolchain to run, and
+#     is the same engine Google uses for googleapis-* repos. It handles the
+#     monorepo (`backend/`, `frontend-next/`) shape we'll grow into.
+#   - auto-changelog is a generator only — no PR / tag automation.
+#   - semantic-release is more flexible but requires npm tokens + plugins
+#     just to write a CHANGELOG; overkill for an MIT OSS repo.
+#
+# Configuration: this workflow uses release-please's *inline* config (no
+# release-please-config.json) because the repo root is a single package.
+# Switch to a `release-please-config.json` if/when we split publishing per
+# component (backend Python wheel + frontend npm package).
+#
+# Docs: https://github.com/googleapis/release-please-action
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # never cancel a release PR mid-flight
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # `simple` strategy = single CHANGELOG.md at the repo root, single
+          # tag scheme `vX.Y.Z`. Matches the existing CHANGELOG.md format.
+          release-type: simple
+          # Pin to the changelog file we already maintain.
+          changelog-path: CHANGELOG.md
+          # Don't auto-create a draft GitHub Release; the changelog PR is
+          # the audit trail. Maintainers can publish releases manually from
+          # tags if they want a marketing surface.
+          skip-github-release: true

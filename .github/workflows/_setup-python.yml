@@ -1,0 +1,53 @@
+name: Reusable Python Setup
+
+# Reusable workflow that installs Python with pip caching, installs backend
+# requirements, and (optionally) tooling extras for lint / type-check jobs.
+#
+# Caller pattern (see ci.yml):
+#
+#   jobs:
+#     backend-tests:
+#       uses: ./.github/workflows/_setup-python.yml
+#       with:
+#         python-version: "3.12"
+#         install-extras: "dev"
+#
+# Docs: https://docs.github.com/en/actions/using-workflows/reusing-workflows
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python interpreter version (matches setup-python)"
+        required: false
+        type: string
+        default: "3.12"
+      install-extras:
+        description: "Optional comma-separated tool sets to install (e.g. 'lint', 'audit')"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend requirements
+        run: pip install -r backend/requirements.txt
+
+      - name: Install lint extras
+        if: contains(inputs.install-extras, 'lint')
+        run: pip install ruff black mypy
+
+      - name: Install audit extras
+        if: contains(inputs.install-extras, 'audit')
+        run: pip install pip-audit
