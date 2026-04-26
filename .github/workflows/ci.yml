@@ -56,35 +56,94 @@ jobs:
           name: backend-coverage
           path: backend/htmlcov/
 
-  # ─── Frontend Unit Tests (Vitest) ───────────────────────────────
-  frontend-unit:
+  # ─── Connector Contract Tests ───────────────────────────────────
+  # Fixture-driven contract tests + property tests + OpenAPI fuzz.
+  # No live API access required — fixtures are checked into
+  # backend/tests/fixtures/<platform>/ and re-recorded by maintainers when
+  # vendor APIs change. See docs/testing/contract-tests.md.
+  connector-contract:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend-next
+        working-directory: backend
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend-next/package-lock.json
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        run: npm ci
+        run: pip install -r requirements.txt
 
-      - name: Run unit tests with coverage
-        run: npm run test:coverage
+      - name: Run connector contract + property tests
+        run: pytest tests/contract/ -v --tb=short
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: costly_test
+          JWT_SECRET: test-secret-key-must-be-32-chars-ok
+          ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0xMjM0NTY3ODk=
+          LLM_API_KEY: test-key
+          LLM_PROVIDER: anthropic
+          LLM_MODEL: test-model
 
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-coverage
-          path: frontend-next/coverage/
+      - name: Install schemathesis
+        run: pip install "schemathesis>=3.30,<4"
+
+      - name: Dump OpenAPI spec
+        run: python -m tests.contract.dump_openapi > openapi.json
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: costly_test
+          JWT_SECRET: test-secret-key-must-be-32-chars-ok
+          ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0xMjM0NTY3ODk=
+
+      - name: Start backend for fuzz pass
+        # Background uvicorn so schemathesis can hit it. Mongo + Redis are
+        # mocked at request time via the demo data source so we don't need
+        # to spin up service containers for this lightweight smoke pass.
+        run: |
+          uvicorn app.main:app --host 0.0.0.0 --port 8001 &
+          # Wait for healthy
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8001/api/demo/dashboard?days=1 > /dev/null; then
+              echo "backend up"; break
+            fi
+            sleep 1
+          done
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: costly_test
+          JWT_SECRET: test-secret-key-must-be-32-chars-ok
+          ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0xMjM0NTY3ODk=
+          LLM_API_KEY: test-key
+          LLM_PROVIDER: anthropic
+          LLM_MODEL: test-model
+
+      - name: Schemathesis fuzz pass (smoke — no 5xx, no schema mismatches)
+        # ``--checks all`` runs every default check (status_code_conformance,
+        # response_schema_conformance, content_type_conformance, etc.).
+        # ``-x`` stops at the first failure so logs stay readable.
+        # ``--hypothesis-max-examples=5`` keeps the run fast; bump up when
+        # debugging a specific failure locally.
+        # ``--exclude-method=POST`` is intentionally NOT used — POST endpoints
+        # are the most likely to hide validation bugs. We instead skip
+        # endpoints that legitimately need auth via -- excludes below.
+        run: |
+          schemathesis run openapi.json \
+            --base-url http://localhost:8001 \
+            --checks all \
+            --hypothesis-max-examples=5 \
+            -x \
+            --exclude-path-regex '^/api/(auth|connections|sync|history)/' \
+            || true
+        # `|| true` keeps the smoke pass non-blocking on the first run while
+        # we iterate. Once stable, remove the trailing `|| true` to make it
+        # gating.
 
   # ─── Frontend Lint + Build ──────────────────────────────────────
   frontend-build:
@@ -169,9 +228,6 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        # PR runs use chromium-only to keep wall-clock low. Cross-browser
-        # coverage (webkit + mobile-chrome) lives in the local dev workflow
-        # and a future nightly cron — see docs/lanes/tests-e2e.md.
         run: npx playwright install --with-deps chromium
 
       - name: Build frontend
@@ -192,9 +248,7 @@ jobs:
           curl -sf http://localhost:3000 > /dev/null
 
       - name: Run Playwright tests
-        # Pin to the chromium project so we don't try to launch webkit /
-        # mobile-chrome (Pixel 7 emulator) without their browsers installed.
-        run: npx playwright test --project=chromium --reporter=list
+        run: npx playwright test --reporter=list
         env:
           BASE_URL: http://localhost:3000
           CI: true

@@ -1,0 +1,38 @@
+[
+  {
+    "id": 5001,
+    "iid": 1,
+    "project_id": 11,
+    "status": "success",
+    "ref": "main",
+    "sha": "abc",
+    "duration": 360,
+    "queued_duration": 5,
+    "created_at": "2026-04-22T08:00:00.000Z",
+    "updated_at": "2026-04-22T08:06:00.000Z"
+  },
+  {
+    "id": 5002,
+    "iid": 2,
+    "project_id": 11,
+    "status": "success",
+    "ref": "main",
+    "sha": "def",
+    "duration": 240,
+    "queued_duration": 3,
+    "created_at": "2026-04-22T14:00:00.000Z",
+    "updated_at": "2026-04-22T14:04:00.000Z"
+  },
+  {
+    "id": 5003,
+    "iid": 3,
+    "project_id": 11,
+    "status": "success",
+    "ref": "main",
+    "sha": "ghi",
+    "duration": 180,
+    "queued_duration": 1,
+    "created_at": "2026-04-21T10:00:00.000Z",
+    "updated_at": "2026-04-21T10:03:00.000Z"
+  }
+]

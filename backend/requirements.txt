@@ -21,5 +21,13 @@ slowapi
 pytest
 pytest-asyncio
 pytest-cov
+# Contract / property / record-replay testing for vendor connectors.
+# - respx: declarative httpx route mocks driven by JSON fixtures
+# - hypothesis: property-based tests for cost-math invariants
+# - pytest-recording (vcrpy under the hood): record/replay HTTP cassettes for re-recording
+#   fixtures from real APIs when vendor schemas drift
+respx>=0.21.0
+hypothesis>=6.100.0
+pytest-recording>=0.13.0
 databricks-sql-connector>=3.0.0
 python-multipart>=0.0.9

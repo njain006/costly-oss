@@ -1,0 +1,12 @@
+{
+  "pagination": {
+    "pageNumber": "1",
+    "pageSize": "1",
+    "totalAvailable": "25"
+  },
+  "users": {
+    "user": [
+      {"id": "u-1", "name": "alice", "siteRole": "Creator"}
+    ]
+  }
+}

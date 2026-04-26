@@ -1,0 +1,13 @@
+{
+  "code": "Success",
+  "data": {
+    "items": [
+      {
+        "id": "group_warehouse",
+        "name": "production_warehouse",
+        "created_at": "2024-01-15T12:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  }
+}

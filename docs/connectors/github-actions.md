@@ -284,3 +284,24 @@ File: `backend/app/services/connectors/github_connector.py`
 ## Change Log
 
 - 2026-04-24: Initial knowledge-base created
+
+## Re-recording contract fixtures
+
+Contract tests for this connector live at `backend/tests/contract/test_github.py`
+and load JSON fixtures from `backend/tests/fixtures/github/`. The fixtures are
+intentionally hand-written from the public API docs so they don't leak any
+real account data — every contributor can run the suite offline.
+
+To capture fresh fixtures against a real GitHub Actions account when the API
+schema drifts, set credentials and run pytest with `--record-mode=once`:
+
+```bash
+cd backend
+GITHUB_TOKEN=ghp_xxx GITHUB_ORG=your-org \
+    pytest tests/contract/test_github.py --record-mode=once
+```
+
+Then sanitize the captured JSON (strip account ids, emails, tokens) before
+committing. See `docs/testing/contract-tests.md` for the philosophy.
+
+

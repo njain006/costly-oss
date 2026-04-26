@@ -1,0 +1,7 @@
+{
+  "data": {
+    "getUser": {
+      "email": "test@example.com"
+    }
+  }
+}

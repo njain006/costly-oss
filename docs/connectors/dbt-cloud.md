@@ -354,6 +354,27 @@ Phase 4:
 - Fusion-aware pricing (detect Fusion runs → discount successful-model cost since Fusion plans typically have different rates).
 - Alert integration: anomalous model duration, failed-run wasted spend, materialization drift.
 
+## Re-recording contract fixtures
+
+Contract tests for this connector live at `backend/tests/contract/test_dbt_cloud.py`
+and load JSON fixtures from `backend/tests/fixtures/dbt_cloud/`. The fixtures
+are intentionally hand-written from the public API docs so they don't leak any
+real account data.
+
+To capture fresh fixtures against a real dbt Cloud account when the API
+schema drifts, set credentials and re-run with the recording flag:
+
+```bash
+cd backend
+DBT_CLOUD_API_TOKEN=dbtc_xxx DBT_CLOUD_ACCOUNT_ID=12345 \
+    pytest tests/contract/test_dbt_cloud.py --record-mode=once
+```
+
+Then sanitize the captured `runs.json` (strip account_id, project_id, etc.)
+before committing. See `docs/testing/contract-tests.md` for the full
+re-recording philosophy.
+
 ## Change Log
 
 - 2026-04-24: Initial knowledge-base created
+- 2026-04-23: Added contract test + JSON fixtures (lane/tests-connector-contract)

@@ -1,0 +1,23 @@
+{
+  "pagination": {
+    "pageNumber": "1",
+    "pageSize": "100",
+    "totalAvailable": "2"
+  },
+  "views": {
+    "view": [
+      {
+        "id": "view-1",
+        "name": "Sales Dashboard",
+        "contentUrl": "Sales/sheets/SalesDashboard",
+        "usage": {"totalViewCount": 1234}
+      },
+      {
+        "id": "view-2",
+        "name": "Marketing Funnel",
+        "contentUrl": "Marketing/sheets/Funnel",
+        "usage": {"totalViewCount": 567}
+      }
+    ]
+  }
+}

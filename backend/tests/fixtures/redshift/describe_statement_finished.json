@@ -1,0 +1,10 @@
+{
+  "ClusterIdentifier": "analytics-prod",
+  "Duration": 1234567890,
+  "Id": "stmt-abc-123",
+  "QueryString": "SELECT 1",
+  "RedshiftPid": 1001,
+  "Status": "FINISHED",
+  "ResultRows": 2,
+  "ResultSize": 256
+}

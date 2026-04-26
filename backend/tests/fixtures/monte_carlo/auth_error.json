@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "message": "Authentication failed: invalid api token",
+      "extensions": {"code": "UNAUTHENTICATED"}
+    }
+  ],
+  "data": {"getUser": null}
+}

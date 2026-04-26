@@ -1,0 +1,115 @@
+{
+  "status": {
+    "code": 200,
+    "is_success": true,
+    "user_message": "Success!",
+    "developer_message": ""
+  },
+  "data": [
+    {
+      "id": 8001,
+      "trigger_id": 9001,
+      "account_id": 12345,
+      "project_id": 200,
+      "job_definition_id": 7001,
+      "status": 10,
+      "git_branch": "main",
+      "git_sha": "abc123",
+      "duration": 510,
+      "queued_duration": 30,
+      "run_duration": 480,
+      "duration_humanized": "8 minutes",
+      "queued_duration_humanized": "30 seconds",
+      "run_duration_humanized": "8 minutes",
+      "created_at": "2026-04-22T12:34:56.000000+00:00",
+      "updated_at": "2026-04-22T12:43:26.000000+00:00",
+      "dequeued_at": "2026-04-22T12:35:26.000000+00:00",
+      "started_at": "2026-04-22T12:35:26.000000+00:00",
+      "finished_at": "2026-04-22T12:43:26.000000+00:00",
+      "executed_by_thread_id": null,
+      "artifacts_saved": true,
+      "artifact_s3_path": "s3://example",
+      "has_docs_generated": false,
+      "has_sources_generated": true,
+      "notifications_sent": true,
+      "blocked_by": [],
+      "scribe_enabled": false,
+      "job": {
+        "id": 7001,
+        "account_id": 12345,
+        "project_id": 200,
+        "name": "nightly_transform",
+        "dbt_version": "1.8.0",
+        "execute_steps": ["dbt run", "dbt test"],
+        "state": 1
+      }
+    },
+    {
+      "id": 8002,
+      "trigger_id": 9002,
+      "account_id": 12345,
+      "project_id": 200,
+      "job_definition_id": 7002,
+      "status": 20,
+      "git_branch": "main",
+      "git_sha": "def456",
+      "duration": 120,
+      "queued_duration": 10,
+      "run_duration": 110,
+      "duration_humanized": "2 minutes",
+      "created_at": "2026-04-22T08:00:00.000000+00:00",
+      "updated_at": "2026-04-22T08:02:00.000000+00:00",
+      "started_at": "2026-04-22T08:00:10.000000+00:00",
+      "finished_at": "2026-04-22T08:02:00.000000+00:00",
+      "job": {
+        "id": 7002,
+        "name": "hourly_snapshot",
+        "dbt_version": "1.8.0"
+      }
+    },
+    {
+      "id": 8003,
+      "trigger_id": 9003,
+      "account_id": 12345,
+      "project_id": 200,
+      "job_definition_id": 7001,
+      "status": 30,
+      "duration": 30,
+      "queued_duration": 30,
+      "run_duration": 0,
+      "created_at": "2026-04-21T10:00:00.000000+00:00",
+      "updated_at": "2026-04-21T10:00:30.000000+00:00",
+      "job": {
+        "id": 7001,
+        "name": "nightly_transform"
+      }
+    },
+    {
+      "id": 8004,
+      "trigger_id": 9004,
+      "account_id": 12345,
+      "project_id": 200,
+      "job_definition_id": 7001,
+      "status": 1,
+      "duration": 0,
+      "created_at": "2026-04-22T15:00:00.000000+00:00",
+      "updated_at": "2026-04-22T15:00:00.000000+00:00",
+      "job": {
+        "id": 7001,
+        "name": "nightly_transform"
+      }
+    }
+  ],
+  "extra": {
+    "filters": {
+      "limit": 100,
+      "offset": 0,
+      "order_by": "-created_at"
+    },
+    "order_by": "-created_at",
+    "pagination": {
+      "count": 4,
+      "total_count": 4
+    }
+  }
+}

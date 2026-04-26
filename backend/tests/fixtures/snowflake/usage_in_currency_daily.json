@@ -1,0 +1,9 @@
+{
+  "_description": "Synthetic SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY rows. Each row is [USAGE_DATE, ACCOUNT_NAME, SERVICE_TYPE, USAGE_TYPE, USAGE, USAGE_UNITS, USAGE_IN_CURRENCY, CURRENCY] in cursor order.",
+  "rows": [
+    ["2026-04-22", "MY_ACCOUNT", "COMPUTE", "warehouse credits", 12.5, "credits", 37.5, "USD"],
+    ["2026-04-22", "MY_ACCOUNT", "STORAGE", "active storage", 2048.0, "terabytes", 46.0, "USD"],
+    ["2026-04-22", "MY_ACCOUNT", "AI_SERVICES", "cortex complete", 0.75, "credits", 4.5, "USD"],
+    ["2026-04-22", "MY_ACCOUNT", "PIPE", "snowpipe ingestion", 0.5, "credits", 1.5, "USD"]
+  ]
+}

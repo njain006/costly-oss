@@ -1,0 +1,19 @@
+{
+  "code": "Success",
+  "data": {
+    "usage": [
+      {
+        "date": "2026-04-21",
+        "monthly_active_rows": 1500000,
+        "syncs": 24,
+        "cost": 1.5
+      },
+      {
+        "date": "2026-04-22",
+        "monthly_active_rows": 2000000,
+        "syncs": 24,
+        "cost": 2.0
+      }
+    ]
+  }
+}

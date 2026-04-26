@@ -83,17 +83,21 @@ def test_connector_has_required_methods(module_path, class_name, platform):
     reason="motor not installed (runs in Docker)"
 )
 def test_connector_map_has_all_connectors():
-    """CONNECTOR_MAP must include all 17 connectors (16 external + snowflake).
+    """CONNECTOR_MAP must include all 18 connectors (17 external + snowflake).
 
     SnowflakeConnector was added to CONNECTOR_MAP in commit bceb94f
     ("Sync with upstream: ... Snowflake unification") and is already on main.
     RedshiftConnector was split out of the AWS umbrella as a first-class
     connector in the lane/redshift branch.
+    ClaudeCodeConnector ingests Claude Code transcripts into ai_inference
+    cost records and was added to CONNECTOR_MAP alongside the connector
+    rollouts in commit 7931a35.
     """
     from app.services.unified_costs import CONNECTOR_MAP
-    expected = {"snowflake", "aws", "anthropic", "dbt_cloud", "openai", "fivetran", "gemini",
-                "airbyte", "monte_carlo", "gcp", "databricks", "looker",
-                "tableau", "github", "gitlab", "omni", "redshift"}
+    expected = {"snowflake", "aws", "anthropic", "claude_code", "dbt_cloud",
+                "openai", "fivetran", "gemini", "airbyte", "monte_carlo",
+                "gcp", "databricks", "looker", "tableau", "github", "gitlab",
+                "omni", "redshift"}
     assert set(CONNECTOR_MAP.keys()) == expected
 
 

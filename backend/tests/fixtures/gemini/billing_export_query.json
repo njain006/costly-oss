@@ -1,0 +1,54 @@
+{
+  "_description": "BigQuery jobs.query response for the Gemini billing-export aggregate query. Each row.f[].v is the cell value in column order: usage_date, sku_description, sku_id, service_description, project_id, region, usage_amount, usage_unit, cost, currency, credits_amount.",
+  "kind": "bigquery#queryResponse",
+  "schema": {
+    "fields": [
+      {"name": "usage_date", "type": "DATE"},
+      {"name": "sku_description", "type": "STRING"},
+      {"name": "sku_id", "type": "STRING"},
+      {"name": "service_description", "type": "STRING"},
+      {"name": "project_id", "type": "STRING"},
+      {"name": "region", "type": "STRING"},
+      {"name": "usage_amount", "type": "FLOAT"},
+      {"name": "usage_unit", "type": "STRING"},
+      {"name": "cost", "type": "FLOAT"},
+      {"name": "currency", "type": "STRING"},
+      {"name": "credits_amount", "type": "FLOAT"}
+    ]
+  },
+  "rows": [
+    {
+      "f": [
+        {"v": "2026-04-22"},
+        {"v": "Vertex AI - Gemini 2.5 Pro - Input"},
+        {"v": "ABCD-1234"},
+        {"v": "Vertex AI"},
+        {"v": "test-project"},
+        {"v": "us-central1"},
+        {"v": "1500000"},
+        {"v": "tokens"},
+        {"v": "1.875"},
+        {"v": "USD"},
+        {"v": "0"}
+      ]
+    },
+    {
+      "f": [
+        {"v": "2026-04-22"},
+        {"v": "Vertex AI - Gemini 2.5 Pro - Output"},
+        {"v": "ABCD-5678"},
+        {"v": "Vertex AI"},
+        {"v": "test-project"},
+        {"v": "us-central1"},
+        {"v": "300000"},
+        {"v": "tokens"},
+        {"v": "3.0"},
+        {"v": "USD"},
+        {"v": "0"}
+      ]
+    }
+  ],
+  "totalRows": "2",
+  "jobComplete": true,
+  "cacheHit": false
+}

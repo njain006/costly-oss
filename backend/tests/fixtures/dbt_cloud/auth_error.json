@@ -1,0 +1,9 @@
+{
+  "status": {
+    "code": 401,
+    "is_success": false,
+    "user_message": "Authentication credentials were not provided.",
+    "developer_message": "Authentication credentials were not provided."
+  },
+  "data": null
+}

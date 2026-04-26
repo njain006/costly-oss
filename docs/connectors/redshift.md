@@ -430,3 +430,24 @@ Source: `backend/app/services/connectors/redshift_connector.py`
 ## Change Log
 
 - 2026-04-23: Initial dedicated `RedshiftConnector` — split from the AWS umbrella, added Data API wrapper, provisioned + serverless + Spectrum + CS coverage, 47-test pytest suite.
+
+## Re-recording contract fixtures
+
+Contract tests for this connector live at `backend/tests/contract/test_redshift.py`
+and load JSON fixtures from `backend/tests/fixtures/redshift/`. The fixtures are
+intentionally hand-written from the public API docs so they don't leak any
+real account data — every contributor can run the suite offline.
+
+To capture fresh fixtures against a real Redshift account when the API
+schema drifts, set credentials and run pytest with `--record-mode=once`:
+
+```bash
+cd backend
+# Redshift fixtures pin the boto3 redshift-data shape — capture via `aws redshift-data get-statement-result --id <Id>` \
+    pytest tests/contract/test_redshift.py --record-mode=once
+```
+
+Then sanitize the captured JSON (strip account ids, emails, tokens) before
+committing. See `docs/testing/contract-tests.md` for the philosophy.
+
+

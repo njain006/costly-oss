@@ -518,3 +518,24 @@ Source: `backend/app/services/connectors/snowflake_connector.py` (~1,220 lines, 
 - 2026-04-24: **ACCOUNT_USAGE freshness probe.** New `_probe_freshness()` method issues one cheap `MAX(date_col)` query against `USAGE_IN_CURRENCY_DAILY` → `METERING_DAILY_HISTORY` → `WAREHOUSE_METERING_HISTORY` (first readable wins). Populates `self.freshness = {view, latest, age_hours, adjusted_hours}` so the UI can render a "last updated X hours ago" badge. Emits a warning when lag exceeds 3h beyond the structural 24h daily cadence, and a STALE warning at 24h+ beyond. Honors `prefer_org_usage=False` (skips ORGANIZATION_USAGE in the probe sequence). Addresses gap #17 (freshness/latency display). Constants exposed: `FRESHNESS_WARN_HOURS`, `FRESHNESS_STALE_HOURS`.
 - 2026-04-24: **Tests** added 25 new cases across `TestAIServicesUsageHistory` (parametrized over 5 AI families × 12 function/model combinations, per-model pricing overrides, case-insensitive model matching, token-vs-credit usage unit, zero-credit filtering, drill-down opt-out, permission errors, missing-view soft warning), `TestFreshnessProbe` (recent/lag/stale/denied/opt-out scenarios), and `TestPricingConfigCortexModels`. Total connector test count: 80 (was 55). Full suite: 167 passed.
 - 2026-04-24: **Grade upgrade B+ → A-.** Gaps closed: #6 (Cortex per-model breakdown), #9 (AI_SERVICES_USAGE_HISTORY), #17 (freshness display). Still outstanding: #1 (query-level cost), #2 (right-sizing from WAREHOUSE_LOAD_HISTORY), #3 (auto-suspend from WAREHOUSE_EVENTS_HISTORY), #5 (Gen-2 detection), #7 (Iceberg requests as its own line — covered in org-usage service type mapping but not yet in fallback path), #8 (Snowpark Container Services — covered by serverless view, no unit economics surface), #10 (multi-account rollup), #11 (budget integration read), #12 (capacity detection), #13 (region-aware pricing), #14 (dbt-snowflake-monitoring integration), #15 (write-back actions).
+
+## Re-recording contract fixtures
+
+Contract tests for this connector live at `backend/tests/contract/test_snowflake.py`
+and load JSON fixtures from `backend/tests/fixtures/snowflake/`. The fixtures are
+intentionally hand-written from the public API docs so they don't leak any
+real account data — every contributor can run the suite offline.
+
+To capture fresh fixtures against a real Snowflake account when the API
+schema drifts, set credentials and run pytest with `--record-mode=once`:
+
+```bash
+cd backend
+# Snowflake fixtures are derived from cursor results, not HTTP — re-capture via SnowSQL or the bq-style query in the test docstring \
+    pytest tests/contract/test_snowflake.py --record-mode=once
+```
+
+Then sanitize the captured JSON (strip account ids, emails, tokens) before
+committing. See `docs/testing/contract-tests.md` for the philosophy.
+
+

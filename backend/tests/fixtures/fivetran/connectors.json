@@ -1,0 +1,30 @@
+{
+  "code": "Success",
+  "data": {
+    "items": [
+      {
+        "id": "salesforce_main",
+        "group_id": "group_warehouse",
+        "service": "salesforce",
+        "schema": "salesforce",
+        "paused": false,
+        "status": {
+          "setup_state": "connected",
+          "sync_state": "scheduled"
+        }
+      },
+      {
+        "id": "stripe_main",
+        "group_id": "group_warehouse",
+        "service": "stripe",
+        "schema": "stripe",
+        "paused": false,
+        "status": {
+          "setup_state": "connected",
+          "sync_state": "scheduled"
+        }
+      }
+    ],
+    "next_cursor": null
+  }
+}

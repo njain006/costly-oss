@@ -1,0 +1,9 @@
+{
+  "_description": "boto3 redshift-data execute_statement response",
+  "ClusterIdentifier": "analytics-prod",
+  "CreatedAt": "2026-04-22T12:00:00Z",
+  "Database": "analytics",
+  "DbUser": "costly_reader",
+  "Id": "stmt-abc-123",
+  "Status": "SUBMITTED"
+}

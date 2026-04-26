@@ -1,0 +1,36 @@
+{
+  "data": [
+    {
+      "jobId": 100001,
+      "status": "succeeded",
+      "jobType": "sync",
+      "startTime": "2026-04-22T03:00:00Z",
+      "duration": 420,
+      "bytesSynced": 5242880,
+      "rowsSynced": 250000,
+      "connectionId": "conn-001"
+    },
+    {
+      "jobId": 100002,
+      "status": "succeeded",
+      "jobType": "sync",
+      "startTime": "2026-04-22T11:00:00Z",
+      "duration": 480,
+      "bytesSynced": 6291456,
+      "rowsSynced": 300000,
+      "connectionId": "conn-001"
+    },
+    {
+      "jobId": 100003,
+      "status": "succeeded",
+      "jobType": "sync",
+      "startTime": "2026-04-21T03:00:00Z",
+      "duration": 360,
+      "bytesSynced": 4194304,
+      "rowsSynced": 200000,
+      "connectionId": "conn-001"
+    }
+  ],
+  "next": null,
+  "previous": null
+}

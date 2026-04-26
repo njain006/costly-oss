@@ -1,0 +1,14 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Access Denied: BigQuery BigQuery: Permission denied while running query.",
+    "errors": [
+      {
+        "message": "Access Denied: BigQuery BigQuery: Permission denied while running query.",
+        "domain": "global",
+        "reason": "accessDenied"
+      }
+    ],
+    "status": "PERMISSION_DENIED"
+  }
+}

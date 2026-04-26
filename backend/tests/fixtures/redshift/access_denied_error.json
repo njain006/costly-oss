@@ -1,0 +1,11 @@
+{
+  "_description": "Shape of the boto3 ClientError.response payload when the IAM principal lacks redshift-data:ExecuteStatement.",
+  "Error": {
+    "Code": "AccessDeniedException",
+    "Message": "User: arn:aws:iam::123456789012:user/costly is not authorized to perform: redshift-data:ExecuteStatement on resource: arn:aws:redshift:us-east-1:123456789012:cluster:analytics-prod"
+  },
+  "ResponseMetadata": {
+    "RequestId": "abc",
+    "HTTPStatusCode": 403
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "id": 11,
+    "name": "data-pipeline",
+    "path_with_namespace": "team/data-pipeline",
+    "default_branch": "main"
+  },
+  {
+    "id": 12,
+    "name": "infra",
+    "path_with_namespace": "team/infra",
+    "default_branch": "main"
+  }
+]

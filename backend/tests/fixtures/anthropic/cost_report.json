@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-04-22T00:00:00Z",
+      "ending_at": "2026-04-23T00:00:00Z",
+      "results": [
+        {
+          "workspace_id": "wrkspc_default",
+          "description": "claude-sonnet-4-6 input",
+          "amount": {"value": "0.230000", "currency": "USD"}
+        },
+        {
+          "workspace_id": "wrkspc_default",
+          "description": "claude-sonnet-4-6 output",
+          "amount": {"value": "0.180000", "currency": "USD"}
+        },
+        {
+          "workspace_id": "wrkspc_default",
+          "description": "claude-haiku-4-5 input",
+          "amount": {"value": "0.030000", "currency": "USD"}
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

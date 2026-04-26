@@ -1,0 +1,24 @@
+{
+  "_description": "Realistic boto3 redshift-data get_statement_result response — Records is a list of rows; each cell is one of {stringValue, longValue, doubleValue, booleanValue, isNull}.",
+  "ColumnMetadata": [
+    {"name": "usage_date", "typeName": "date"},
+    {"name": "service_class", "typeName": "varchar"},
+    {"name": "compute_seconds", "typeName": "bigint"},
+    {"name": "queries", "typeName": "bigint"}
+  ],
+  "Records": [
+    [
+      {"stringValue": "2026-04-22"},
+      {"stringValue": "etl"},
+      {"longValue": 7200},
+      {"longValue": 412}
+    ],
+    [
+      {"stringValue": "2026-04-21"},
+      {"stringValue": "etl"},
+      {"longValue": 5400},
+      {"longValue": 350}
+    ]
+  ],
+  "TotalNumRows": 2
+}

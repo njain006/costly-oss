@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "connectionId": "conn-001",
+      "name": "salesforce-to-snowflake",
+      "workspaceId": "ws-1",
+      "source": {"sourceId": "src-1", "name": "Salesforce"},
+      "destination": {"destinationId": "dst-1", "name": "Snowflake"},
+      "status": "active",
+      "schedule": {"scheduleType": "cron"}
+    },
+    {
+      "connectionId": "conn-002",
+      "name": "stripe-to-snowflake",
+      "workspaceId": "ws-1",
+      "source": {"sourceId": "src-2", "name": "Stripe"},
+      "destination": {"destinationId": "dst-1", "name": "Snowflake"},
+      "status": "active"
+    }
+  ],
+  "next": null,
+  "previous": null
+}

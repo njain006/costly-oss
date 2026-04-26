@@ -1,0 +1,13 @@
+{
+  "credentials": {
+    "site": {
+      "id": "site-uuid-1234",
+      "contentUrl": "test_site"
+    },
+    "user": {
+      "id": "user-uuid-5678"
+    },
+    "token": "tableau-auth-token-xyz",
+    "estimatedTimeToExpiration": "00:00:240:00"
+  }
+}

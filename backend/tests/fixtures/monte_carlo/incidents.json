@@ -1,0 +1,24 @@
+{
+  "data": {
+    "getIncidents": {
+      "edges": [
+        {
+          "node": {
+            "id": "inc-1",
+            "createdTime": "2026-04-22T08:30:00Z",
+            "severity": "HIGH",
+            "incidentType": "FRESHNESS"
+          }
+        },
+        {
+          "node": {
+            "id": "inc-2",
+            "createdTime": "2026-04-21T14:15:00Z",
+            "severity": "MEDIUM",
+            "incidentType": "VOLUME"
+          }
+        }
+      ]
+    }
+  }
+}
