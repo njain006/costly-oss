@@ -425,7 +425,7 @@ cloud.google.com) covers the framework.
 
 ## Costly's Current Connector Status
 
-**File:** `/Users/jain/src/personal/costly/backend/app/services/connectors/gemini_connector.py`
+**File:** `backend/app/services/connectors/gemini_connector.py`
 
 ~890 lines. Structurally the most mature of the AI connectors. What it does:
 

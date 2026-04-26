@@ -23,11 +23,16 @@ import pytest
 from app.models.platform import CostCategory, UnifiedCost
 from app.services.connectors.base import BaseConnector
 from app.services.connectors.claude_code_connector import (
+    BUILTIN_TOOL_NAMES,
     CACHE_READ_MULTIPLIER,
     CACHE_WRITE_1H_MULTIPLIER,
     CACHE_WRITE_5M_MULTIPLIER,
     ClaudeCodeConnector,
     TokenUsage,
+    ToolAttribution,
+    TurnAttribution,
+    _attribute_tools,
+    _content_block_weight,
     _parse_turn,
     _resolve_pricing,
     aggregate_costs,
@@ -166,7 +171,11 @@ class TestProjectNameFromCwd:
 
 
 def _assistant_row(**overrides) -> dict:
-    """Build a realistic assistant JSONL row. Override any field."""
+    """Build a realistic assistant JSONL row. Override any field.
+
+    Supports injecting a custom `content` list via the `content` kwarg so
+    tests can exercise tool_use attribution.
+    """
     row = {
         "type": "assistant",
         "timestamp": "2026-04-01T12:00:00.000Z",
@@ -174,6 +183,7 @@ def _assistant_row(**overrides) -> dict:
         "cwd": "/Users/jain/src/myproj",
         "message": {
             "model": "claude-sonnet-4-6",
+            "content": [],
             "usage": {
                 "input_tokens": 1000,
                 "output_tokens": 500,
@@ -192,6 +202,8 @@ def _assistant_row(**overrides) -> dict:
             row["message"]["usage"] = {**row["message"]["usage"], **v}
         elif k == "model":
             row["message"]["model"] = v
+        elif k == "content":
+            row["message"]["content"] = v
         else:
             row[k] = v
     return row
@@ -201,7 +213,7 @@ class TestParseTurn:
     def test_parses_assistant_row_with_nested_cache_creation(self):
         parsed = _parse_turn(_assistant_row())
         assert parsed is not None
-        ts, session, model, cwd, usage = parsed
+        ts, session, model, cwd, usage, tool_attr = parsed
         assert ts == datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
         assert session == "session-123"
         assert model == "claude-sonnet-4-6"
@@ -211,6 +223,8 @@ class TestParseTurn:
         assert usage.cache_read_tokens == 2000
         assert usage.cache_write_5m_tokens == 1000
         assert usage.cache_write_1h_tokens == 2000
+        # Default fixture has an empty content list — no tool attribution.
+        assert tool_attr.tools == ()
 
     def test_flat_cache_creation_input_tokens_treated_as_5m(self):
         """Older transcripts only emit the flat field; no nested breakdown."""
@@ -218,9 +232,37 @@ class TestParseTurn:
         row["message"]["usage"].pop("cache_creation")
         parsed = _parse_turn(row)
         assert parsed is not None
-        _, _, _, _, usage = parsed
+        _, _, _, _, usage, _tool_attr = parsed
         assert usage.cache_write_5m_tokens == 3000
         assert usage.cache_write_1h_tokens == 0
+
+    def test_parses_tool_use_content_into_attribution(self):
+        row = _assistant_row(
+            usage={
+                "input_tokens": 0, "output_tokens": 1000,
+                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+            },
+            content=[
+                {"type": "text", "text": ""},  # weight 0 — output is tool-heavy
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls -la"}},
+                {"type": "tool_use", "id": "t2", "name": "Read",
+                 "input": {"file_path": "/tmp/x"}},
+            ],
+        )
+        row["message"]["usage"]["cache_creation"] = {
+            "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0,
+        }
+        parsed = _parse_turn(row)
+        assert parsed is not None
+        _, _, _, _, _, tool_attr = parsed
+        names = {t.name for t in tool_attr.tools}
+        assert names == {"Bash", "Read"}
+        # Every call present; total tokens split across both.
+        assert sum(t.calls for t in tool_attr.tools) == 2
+        assert sum(t.output_tokens for t in tool_attr.tools) == pytest.approx(
+            1000, abs=1  # rounding slack from proportional split
+        )
 
     def test_skips_non_assistant_rows(self):
         assert _parse_turn({"type": "user", "content": "hello"}) is None
@@ -379,7 +421,242 @@ class TestIterJsonlTurnsAndAggregate:
             assert set(c.metadata) >= {
                 "model", "project", "input_tokens", "output_tokens",
                 "cache_read_tokens", "cache_write_5m_tokens", "cache_write_1h_tokens",
+                "tool_breakdown", "tool_calls_total",
             }
+
+
+# ─── Per-tool-call attribution ──────────────────────────────────────
+
+
+class TestContentBlockWeight:
+    def test_text_block_returns_text_length(self):
+        assert _content_block_weight({"type": "text", "text": "hello"}) == 5
+
+    def test_thinking_block_returns_thinking_length(self):
+        assert (
+            _content_block_weight({"type": "thinking", "thinking": "abcd"}) == 4
+        )
+
+    def test_tool_use_block_returns_json_length(self):
+        block = {"type": "tool_use", "name": "Bash", "input": {"cmd": "ls"}}
+        # Serialised: {"cmd":"ls"} = 12 chars
+        assert _content_block_weight(block) == 12
+
+    def test_tool_use_with_empty_input_has_weight_two(self):
+        # '{}' is two characters.
+        assert _content_block_weight(
+            {"type": "tool_use", "name": "X", "input": {}}
+        ) == 2
+
+    def test_unknown_block_type_returns_zero(self):
+        assert _content_block_weight({"type": "tool_result", "content": "x" * 99}) == 0
+        assert _content_block_weight({"type": "image"}) == 0
+
+    def test_non_serialisable_input_is_graceful(self):
+        # Inject something json.dumps cannot serialise; weight falls back to 0.
+        class Weird: ...
+        block = {"type": "tool_use", "name": "X", "input": {"bad": Weird()}}
+        assert _content_block_weight(block) == 0
+
+
+class TestAttributeTools:
+    def test_no_content_returns_empty(self):
+        result = _attribute_tools([], output_tokens=100, output_cost_usd=0.1)
+        assert result.tools == ()
+
+    def test_pure_text_turn_has_no_attribution(self):
+        content = [{"type": "text", "text": "some narration only"}]
+        result = _attribute_tools(content, output_tokens=100, output_cost_usd=0.1)
+        assert result.tools == ()
+
+    def test_single_tool_captures_proportional_share(self):
+        # Text block weight=10, tool_use input '{"x":"y"}' weight=9.
+        content = [
+            {"type": "text", "text": "0123456789"},  # 10 chars
+            {"type": "tool_use", "name": "Bash", "input": {"x": "y"}},  # 9 chars
+        ]
+        result = _attribute_tools(content, output_tokens=1900, output_cost_usd=1.0)
+        assert len(result.tools) == 1
+        tool = result.tools[0]
+        assert tool.name == "Bash"
+        assert tool.calls == 1
+        # 9 / (10 + 9) = ~0.474 → 900 tokens ± 1.
+        assert abs(tool.output_tokens - 900) <= 1
+
+    def test_multiple_distinct_tools_get_separate_entries(self):
+        content = [
+            {"type": "tool_use", "name": "Read", "input": {"a": 1}},
+            {"type": "tool_use", "name": "Bash", "input": {"b": 2}},
+        ]
+        result = _attribute_tools(content, output_tokens=200, output_cost_usd=0.2)
+        names = {t.name for t in result.tools}
+        assert names == {"Read", "Bash"}
+        assert all(t.calls == 1 for t in result.tools)
+        # Equal weights → equal split (within 1-token rounding).
+        assert abs(
+            result.tools[0].output_tokens - result.tools[1].output_tokens
+        ) <= 1
+
+    def test_same_tool_called_twice_is_merged(self):
+        content = [
+            {"type": "tool_use", "name": "Read", "input": {"f": "a"}},
+            {"type": "tool_use", "name": "Read", "input": {"f": "b"}},
+        ]
+        result = _attribute_tools(content, output_tokens=100, output_cost_usd=0.5)
+        assert len(result.tools) == 1
+        tool = result.tools[0]
+        assert tool.name == "Read"
+        assert tool.calls == 2
+        # Both blocks consumed the whole weight pool.
+        assert tool.output_tokens == 100
+        assert tool.cost_usd == pytest.approx(0.5)
+
+    def test_mcp_tool_name_preserved(self):
+        content = [
+            {"type": "tool_use", "name": "mcp__slack__post_message",
+             "input": {"channel": "#ops", "text": "hi"}},
+        ]
+        result = _attribute_tools(content, output_tokens=50, output_cost_usd=0.05)
+        assert result.tools[0].name == "mcp__slack__post_message"
+
+    def test_zero_output_tokens_returns_empty(self):
+        content = [{"type": "tool_use", "name": "Bash", "input": {"c": "x"}}]
+        result = _attribute_tools(content, output_tokens=0, output_cost_usd=0.0)
+        assert result.tools == ()
+
+
+class TestToolAttributionArithmetic:
+    def test_add_same_name_aggregates(self):
+        a = ToolAttribution(name="Bash", calls=1, output_tokens=10, cost_usd=0.01)
+        b = ToolAttribution(name="Bash", calls=2, output_tokens=15, cost_usd=0.02)
+        merged = a + b
+        assert merged.name == "Bash"
+        assert merged.calls == 3
+        assert merged.output_tokens == 25
+        assert merged.cost_usd == pytest.approx(0.03)
+
+    def test_add_different_names_raises(self):
+        a = ToolAttribution(name="Bash", calls=1)
+        b = ToolAttribution(name="Read", calls=1)
+        with pytest.raises(ValueError):
+            _ = a + b
+
+
+class TestToolBreakdownInAggregate:
+    def _tool_turn_row(self, **overrides) -> dict:
+        """Build an assistant row that contains tool_use blocks."""
+        base = _assistant_row(
+            timestamp="2026-04-10T12:00:00Z",
+            cwd="/Users/jain/src/proj-tools",
+            sessionId="session-tools",
+            model="claude-sonnet-4-6",
+            usage={
+                "input_tokens": 0, "output_tokens": 1000,
+                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+            },
+            content=[
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}},
+                {"type": "tool_use", "id": "t2", "name": "Read",
+                 "input": {"file_path": "/x"}},
+                {"type": "tool_use", "id": "t3", "name": "mcp__slack__post",
+                 "input": {"channel": "#ops", "msg": "hi"}},
+            ],
+        )
+        # Flatten cache_creation — keep test fixture simple.
+        base["message"]["usage"]["cache_creation"] = {
+            "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0,
+        }
+        for k, v in overrides.items():
+            base[k] = v
+        return base
+
+    def test_tool_breakdown_surfaces_every_invoked_tool(self, tmp_path: Path):
+        projects_dir = tmp_path / "projects"
+        proj_dir = projects_dir / "-Users-jain-src-proj-tools"
+        proj_dir.mkdir(parents=True)
+        session_file = proj_dir / "session-tools.jsonl"
+        with session_file.open("w") as f:
+            f.write(json.dumps(self._tool_turn_row()) + "\n")
+
+        turns = list(iter_jsonl_turns(projects_dir))
+        costs = aggregate_costs(turns)
+        assert len(costs) == 1
+        breakdown = costs[0].metadata["tool_breakdown"]
+        assert set(breakdown) == {"Bash", "Read", "mcp__slack__post"}
+        for name, entry in breakdown.items():
+            assert entry["calls"] == 1
+            assert entry["output_tokens"] >= 0
+            assert entry["cost_usd"] >= 0
+        # MCP flag is set correctly.
+        assert breakdown["mcp__slack__post"]["is_mcp"] is True
+        assert breakdown["Bash"]["is_mcp"] is False
+        assert breakdown["Bash"]["is_builtin"] is True
+        assert breakdown["mcp__slack__post"]["is_builtin"] is False
+
+    def test_tool_breakdown_totals_dont_exceed_output_tokens(self, tmp_path: Path):
+        projects_dir = tmp_path / "projects"
+        proj_dir = projects_dir / "-Users-jain-src-proj-tools"
+        proj_dir.mkdir(parents=True)
+        session_file = proj_dir / "session-tools.jsonl"
+        with session_file.open("w") as f:
+            f.write(json.dumps(self._tool_turn_row()) + "\n")
+
+        costs = aggregate_costs(list(iter_jsonl_turns(projects_dir)))
+        total_breakdown_tokens = sum(
+            t["output_tokens"] for t in costs[0].metadata["tool_breakdown"].values()
+        )
+        # 3-way proportional split of 1000 output_tokens with rounding slack ≤3.
+        assert abs(total_breakdown_tokens - 1000) <= 3
+
+    def test_tool_calls_total_aggregates_across_turns(self, tmp_path: Path):
+        """Two assistant turns in the same session each invoke Bash twice."""
+        projects_dir = tmp_path / "projects"
+        proj_dir = projects_dir / "-Users-jain-src-proj-tools"
+        proj_dir.mkdir(parents=True)
+        session_file = proj_dir / "session-tools.jsonl"
+        row = self._tool_turn_row(
+            timestamp="2026-04-10T12:00:00Z",
+            sessionId="session-tools",
+        )
+        row["message"]["content"] = [
+            {"type": "tool_use", "id": "a", "name": "Bash", "input": {"cmd": "pwd"}},
+            {"type": "tool_use", "id": "b", "name": "Bash", "input": {"cmd": "whoami"}},
+        ]
+        row2 = self._tool_turn_row(
+            timestamp="2026-04-10T12:05:00Z",
+            sessionId="session-tools",
+        )
+        row2["message"]["content"] = [
+            {"type": "tool_use", "id": "c", "name": "Bash", "input": {"cmd": "ls"}},
+            {"type": "tool_use", "id": "d", "name": "Bash", "input": {"cmd": "df"}},
+        ]
+        with session_file.open("w") as f:
+            f.write(json.dumps(row) + "\n")
+            f.write(json.dumps(row2) + "\n")
+
+        costs = aggregate_costs(list(iter_jsonl_turns(projects_dir)))
+        assert len(costs) == 1
+        breakdown = costs[0].metadata["tool_breakdown"]
+        assert list(breakdown.keys()) == ["Bash"]
+        assert breakdown["Bash"]["calls"] == 4
+        assert costs[0].metadata["tool_calls_total"] == 4
+
+    def test_tool_breakdown_empty_when_no_tool_use(self, fake_projects_dir: Path):
+        """The default fake_projects_dir fixture has no tool_use content."""
+        costs = aggregate_costs(list(iter_jsonl_turns(fake_projects_dir)))
+        for c in costs:
+            assert c.metadata["tool_breakdown"] == {}
+            assert c.metadata["tool_calls_total"] == 0
+
+
+class TestBuiltinToolNamesSet:
+    def test_common_builtins_present(self):
+        for name in ("Bash", "Read", "Edit", "Write", "WebFetch", "Task", "Skill"):
+            assert name in BUILTIN_TOOL_NAMES
+
+    def test_mcp_prefix_not_a_builtin(self):
+        assert "mcp__foo__bar" not in BUILTIN_TOOL_NAMES
 
 
 # ─── ClaudeCodeConnector ─────────────────────────────────────────────

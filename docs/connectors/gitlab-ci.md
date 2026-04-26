@@ -264,7 +264,7 @@ Costly's opportunity: native GitLab multi-SKU cost ingestion with runner cost_fa
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/gitlab_connector.py`
+File: `backend/app/services/connectors/gitlab_connector.py`
 
 - **Class**: `GitLabConnector(BaseConnector)` with `platform = "gitlab"`
 - **Auth**: `credentials["token"]` as `PRIVATE-TOKEN` header; optional `instance_url`, `group_id`, `project_ids`

@@ -88,12 +88,17 @@ from app.routers import (
     public_demo, chat, platforms, anomalies, platform_views,
     teams, settings as settings_router, ai_costs,
 )
+from app.services.connectors.errors import register_connector_exception_handler
 
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title="costly API", version="2.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Convert any CostlyConnectorError raised in a route into a structured JSON
+# error response (code + message + remediation_url + vendor context). See
+# app/services/connectors/errors.py.
+register_connector_exception_handler(app)
 
 app.add_middleware(
     CORSMiddleware,

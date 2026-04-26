@@ -239,7 +239,7 @@ Key pages pulled during this research run:
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/github_connector.py`
+File: `backend/app/services/connectors/github_connector.py`
 
 - **Class**: `GitHubConnector(BaseConnector)` with `platform = "github"`
 - **Auth**: PAT in `credentials["token"]`; optional `org`, `repos` list

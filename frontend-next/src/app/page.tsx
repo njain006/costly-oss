@@ -247,7 +247,7 @@ export default function LandingPage() {
             href="/setup"
             className="text-slate-400 text-sm hover:text-white transition"
           >
-            Docs
+            Setup
           </Link>
           <a
             href={GITHUB_REPO_URL}

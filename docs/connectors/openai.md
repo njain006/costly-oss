@@ -381,7 +381,7 @@ fill the gap.
 
 ## Costly's Current Connector Status
 
-**File:** `/Users/jain/src/personal/costly/backend/app/services/connectors/openai_connector.py`
+**File:** `backend/app/services/connectors/openai_connector.py`
 
 ~249 lines. What it does:
 

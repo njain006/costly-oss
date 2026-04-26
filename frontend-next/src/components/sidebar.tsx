@@ -18,6 +18,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronRight,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -166,6 +167,7 @@ export default function Sidebar() {
         {navLink("/overview", "All Platforms", Globe)}
         {navLink("/ai-costs", "AI Costs", Sparkles)}
         {navLink("/recommendations", "Recommendations", Lightbulb)}
+        {navLink("/anomalies", "Anomalies", AlertTriangle)}
         {navLink("/alerts", "Alerts", Bell)}
 
         <Separator className="bg-white/5 my-3" />

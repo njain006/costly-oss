@@ -193,7 +193,7 @@ Dimensions every competitor tracks: seat count by role, seat spend, per-workbook
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/tableau_connector.py`
+File: `backend/app/services/connectors/tableau_connector.py`
 
 **What it does today:**
 

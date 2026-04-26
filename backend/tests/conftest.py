@@ -127,6 +127,31 @@ def gemini_credentials():
     return {"api_key": "gemini_test_key"}
 
 
+@pytest.fixture
+def redshift_provisioned_credentials():
+    return {
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "region": "us-east-1",
+        "cluster_identifier": "analytics-prod",
+        "database": "analytics",
+        "db_user": "costly_reader",
+        "node_type": "ra3.4xlarge",
+    }
+
+
+@pytest.fixture
+def redshift_serverless_credentials():
+    return {
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "region": "us-east-1",
+        "workgroup_name": "analytics-wg",
+        "database": "dev",
+        "db_user": "costly_reader",
+    }
+
+
 
 # ---------------------------------------------------------------------------
 # API test infrastructure

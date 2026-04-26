@@ -843,9 +843,9 @@ Ranked by typical dollar impact:
 
 ## Costly's Current Connector Status
 
-**File:** `/Users/jain/src/personal/costly/backend/app/services/connectors/aws_connector.py` (300 LOC).
+**File:** `backend/app/services/connectors/aws_connector.py` (300 LOC).
 
-**Knowledge doc:** `/Users/jain/src/personal/costly/backend/app/knowledge/aws.md` (846 LOC). Extensive pricing + waste-pattern knowledge is already encoded — this is a strong asset and the chat agent consumes it.
+**Knowledge doc:** `backend/app/knowledge/aws.md` (846 LOC). Extensive pricing + waste-pattern knowledge is already encoded — this is a strong asset and the chat agent consumes it.
 
 **What the connector does today:**
 
@@ -969,3 +969,9 @@ Ordered by severity:
 ## Change Log
 
 - **2026-04-24**: Initial knowledge base created. Covers pricing for 21+ services, billing data sources (CUR 2.0 + FOCUS 1.2, Cost Explorer, Budgets, Anomaly Detection, per-service list APIs), OSS tooling landscape, competitor landscape, published reference material, a full list of current gaps vs best practice, and a phased roadmap.
+- **2026-04-24 (lane/aws)**: Connector deepened.
+  - Added `cost_type` credential — customers can opt into **AmortizedCost**; each row then carries `unblended_cost_usd` and `amortized_delta_usd` so the UI / chat agent can show the RI / Savings Plan benefit on every service. Closes roadmap gap "use Amortized*Cost metrics… expose UnblendedCost vs AmortizedCost as a toggle."
+  - Added `cost_allocation_tag_keys` credential — Cost Explorer is queried with a second `TAG` `GroupBy` per key; the breakdown is attached as `metadata.tag_breakdown` on every service row. Closes roadmap gap "Add tag-based grouping for a user-specified tag key."
+  - Added `member_account_role_arns` + `external_id` credentials — the connector iterates member ARNs, `sts:AssumeRole`s into each, queries Cost Explorer with the temporary credentials, and emits per-account `UnifiedCost` rows. Downstream `get_unified_costs` already aggregated `by_account`; now it has a real dimension to group on. Closes roadmap gap "STS role-assumption auth."
+  - Frontend overview page now renders a **By Account** panel fed by the existing `/api/platforms/costs` → `by_account` field (previously computed, never shown). Also supplies demo data so the panel is visible in demo mode.
+  - Tests: new `backend/tests/test_aws_connector.py` (14 new cases) parametrized across 1 / 2 / 5 accounts, plus regression guards.

@@ -307,7 +307,7 @@ What they recommend:
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/fivetran_connector.py`
+File: `backend/app/services/connectors/fivetran_connector.py`
 
 What it does well:
 - Correctly uses HTTP Basic auth with api_key + api_secret.

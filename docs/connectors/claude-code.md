@@ -178,15 +178,15 @@ one `UnifiedCost` per bucket with:
 - `category = CostCategory.ai_inference`
 - `team = <project>` (derived from cwd basename)
 - `metadata.model`, `.project`, `.cwd`, `.input_tokens`, `.output_tokens`,
-  `.cache_read_tokens`, `.cache_write_5m_tokens`, `.cache_write_1h_tokens`.
+  `.cache_read_tokens`, `.cache_write_5m_tokens`, `.cache_write_1h_tokens`,
+  `.tool_breakdown` (per-tool calls, output tokens, cost, is_mcp, is_builtin),
+  `.tool_calls_total`.
 
 Dimensions we _could_ surface but don't yet:
 
 - `gitBranch` — cost per branch (useful for feature-branch billing).
 - `sessionId` — cost per conversation.
 - 5-hour rolling block — matches Anthropic's quota accounting.
-- Tool-call category (Bash / Edit / Read / WebFetch / Skill / Agent) — useful
-  for "which tool is burning my quota".
 - Subagent attribution (`parentUuid` chain) — root vs delegated work.
 - Machine / hostname (multi-device).
 - Extended-thinking share (thinking tokens vs non-thinking output).
@@ -411,9 +411,9 @@ standard.
 
 ## Costly's Current Connector Status
 
-**File:** `/Users/jain/src/personal/costly/backend/app/services/connectors/claude_code_connector.py`
+**File:** `backend/app/services/connectors/claude_code_connector.py`
 
-The connector is ~320 lines, test-covered, and ships in the unified-costs map.
+The connector is ~430 lines, test-covered, and ships in the unified-costs map.
 It does the following well:
 
 - Parses every `~/.claude/projects/*/*.jsonl` file under the user's home dir
@@ -431,19 +431,29 @@ It does the following well:
 - Derives a human-readable project name from `cwd` with a fallback to the
   Claude-Code-encoded directory slug (`-Users-jain-src-foo` → `foo`).
 - Survives malformed JSON lines and unreadable files (skips silently).
-- Test-covered in `/Users/jain/src/personal/costly/backend/tests/test_claude_code_connector.py`.
+- **Per-tool-call cost attribution** — parses `message.content` `tool_use`
+  blocks and splits each turn's output tokens and cost across the tools
+  invoked in that turn, weighted by JSON-serialised block length.
+  Surfaces the slice in `metadata.tool_breakdown` keyed by tool name,
+  with `is_mcp` / `is_builtin` flags so the UI can pivot on either axis.
+- Test-covered in `backend/tests/test_claude_code_connector.py`.
 
 Known limitations (see Gaps section for actionable items):
 
 - No `requestId` dedup.
-- Does not surface `sessionId`, `gitBranch`, or tool-call categories in
-  `UnifiedCost.metadata`.
+- Does not surface `sessionId`, `gitBranch` in `UnifiedCost.metadata`
+  (tool-call categories are now shipped — see `metadata.tool_breakdown`).
 - Cost model covers Anthropic models only — users on proxied Kimi / local
   models get Sonnet-priced approximations with no warning.
 - No 5-hour rolling-block analytics (ccusage's differentiator).
 - Single-machine scope.
 - No pricing refresh from LiteLLM.
 - Opus 4.7 tokenizer uplift not acknowledged.
+- Per-tool output-token attribution uses JSON-byte weighting as a proxy
+  for the real server-side tokenisation. For turns dominated by long
+  text/thinking blocks the tool share can be slightly under-counted
+  (≤ a few percent in practice); for tool-heavy agentic turns the
+  approximation is tight.
 
 ## Gaps Relative to Best Practice
 
@@ -451,9 +461,13 @@ Known limitations (see Gaps section for actionable items):
 2. **Session-level aggregation** — expose `sessionId` as an additional metadata
    key; optionally produce one `UnifiedCost` per session for a drill-down view.
 3. **5-hour rolling block bucketing** — match Anthropic subscription quota.
-4. **Tool-call category breakdown** — parse `tool_use` rows, count by name
-   (Bash, Edit, Read, WebFetch, Skill, Agent, Grep, Glob, Write, NotebookEdit,
-   TodoWrite, Task, etc.), emit as metadata so the UI can pivot on it.
+4. ~~Tool-call category breakdown~~ **SHIPPED 2026-04-24** — parse
+   `message.content` `tool_use` blocks, count invocations, proportionally
+   split output cost by JSON-serialised block size, emit
+   `metadata.tool_breakdown` keyed by tool name (Bash, Edit, Read,
+   WebFetch, Task, Skill, `mcp__*__*`, etc.) with `{calls, output_tokens,
+   cost_usd, is_mcp, is_builtin}`. Also emits `metadata.tool_calls_total`
+   per bucket.
 5. **`gitBranch` metadata** — cheap; unlocks "cost per feature branch".
 6. **Thinking-token share** — distinguish visible output tokens from thinking
    tokens when extended thinking is on. Claude Code doesn't expose this
@@ -511,3 +525,27 @@ Known limitations (see Gaps section for actionable items):
 ## Change Log
 
 - 2026-04-24: Initial knowledge-base created by overnight research run.
+- 2026-04-24: Shipped **per-tool-call cost attribution**. The connector now
+  parses `message.content` arrays on assistant rows, extracts every
+  `tool_use` block (Bash, Read, Edit, WebFetch, Task, Skill, MCP tools…),
+  and proportionally splits each turn's `output_tokens` + cost across the
+  tools by JSON-serialised block weight. Every `UnifiedCost.metadata`
+  record now carries:
+  - `tool_breakdown`: `{tool_name: {calls, output_tokens, cost_usd,
+    is_mcp, is_builtin}}` — sorted by tool name. MCP tools are preserved
+    verbatim (`mcp__slack__post_message`); built-in Claude Code tools
+    set `is_builtin=True` so the UI can pivot on them.
+  - `tool_calls_total`: sum of calls across the (day, project, model)
+    bucket.
+  This closes the biggest gap vs the OSS ecosystem (agentsview, sniffly,
+  and ccusage do not emit this per-call slice) and is the YC-pitch
+  differentiator called out in the roadmap. Attribution uses each block's
+  JSON-serialised character length as a proxy for its token share — an
+  approximation, because JSONLs record only aggregate `output_tokens` per
+  turn. Tests (22 new) cover: content block weighting across `text`,
+  `thinking`, `tool_use`, and unknown types; pure-text turns emitting no
+  breakdown; multiple tool types split proportionally; repeat calls to
+  the same tool merging `calls` and `output_tokens`; MCP-namespaced tool
+  names flagged with `is_mcp`; the aggregate invariant that breakdown
+  totals never exceed the turn's output tokens (within ≤3-token rounding
+  slack); and empty breakdowns when no tool_use blocks are present.

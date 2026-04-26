@@ -26,15 +26,31 @@ from app.models.platform import CostCategory, PlatformType, UnifiedCost
 from app.services.connectors import anthropic_connector as ac
 from app.services.connectors.anthropic_connector import (
     CACHE_TIER_MULTIPLIERS,
+    DEPRECATED_MODELS,
+    ISOLATED_SERVICE_TIERS,
     MODEL_PRICING,
     SERVICE_TIER_MULTIPLIERS,
     AnthropicConnector,
     TokenUsage,
     UsageBucket,
+    _deprecation_notice,
     _estimate_cost,
     _resolve_pricing,
     estimate_cost,
 )
+
+
+def _non_rollup(records):
+    """Filter out synthetic rollup records emitted for anomaly surfaces."""
+    return [c for c in records if c.metadata.get("type") != "rollup"]
+
+
+def _rollups(records, rollup_type: str | None = None):
+    """Extract rollup records, optionally filtered to a specific rollup_type."""
+    rollups = [c for c in records if c.metadata.get("type") == "rollup"]
+    if rollup_type is not None:
+        rollups = [c for c in rollups if c.metadata.get("rollup_type") == rollup_type]
+    return rollups
 
 
 # ---------------------------------------------------------------------------
@@ -468,8 +484,9 @@ class TestFetchCosts:
 
         assert all(isinstance(c, UnifiedCost) for c in costs)
         # 3 usage rows — each should be matched to an authoritative cost.
-        # No leftover synthetic rows expected.
-        assert len(costs) == 3
+        # No leftover synthetic rows expected (rollups excluded).
+        primary = _non_rollup(costs)
+        assert len(primary) == 3
         # First request went to cost_report, second to usage_report.
         first_url = seq.calls[0][0][0]
         second_url = seq.calls[1][0][0]
@@ -478,7 +495,7 @@ class TestFetchCosts:
 
         # Find the Opus 4.7 row for 2026-04-20
         opus = next(
-            c for c in costs
+            c for c in primary
             if c.resource == "claude-opus-4-7" and c.date == "2026-04-20"
         )
         assert opus.cost_usd == pytest.approx(42.5)  # from cost_report
@@ -513,12 +530,13 @@ class TestFetchCosts:
         with patch.object(ac.httpx, "post", side_effect=seq):
             costs = connector.fetch_costs(days=7)
 
-        # No cost_report → every bucket uses estimated cost.
-        for c in costs:
+        # No cost_report → every non-rollup bucket uses estimated cost.
+        primary = _non_rollup(costs)
+        for c in primary:
             assert c.metadata["cost_source"] == "estimated"
 
         # Sanity check an estimated figure.
-        sonnet_batch = next(c for c in costs if c.resource == "claude-sonnet-4-6")
+        sonnet_batch = next(c for c in primary if c.resource == "claude-sonnet-4-6")
         # 2M uncached input + 1M output at $3 / $15 * 0.5 (batch) = (6 + 15) * 0.5 = 10.5
         assert sonnet_batch.cost_usd == pytest.approx(10.5)
 
@@ -600,8 +618,9 @@ class TestFetchCosts:
         with patch.object(ac.httpx, "post", side_effect=seq):
             costs = connector.fetch_costs(days=3)
 
-        assert len(costs) == 2
-        resources = {c.resource for c in costs}
+        primary = _non_rollup(costs)
+        assert len(primary) == 2
+        resources = {c.resource for c in primary}
         assert resources == {"claude-opus-4-7", "claude-sonnet-4-6"}
         # Second usage call must have carried the cursor.
         second_usage_call = seq.calls[2]
@@ -639,9 +658,10 @@ class TestFetchCosts:
         with patch.object(ac.httpx, "post", side_effect=seq):
             costs = connector.fetch_costs(days=1)
 
-        assert len(costs) == 1
+        primary = _non_rollup(costs)
+        assert len(primary) == 1
         # (12 + 60) * 0.9 = 64.8
-        assert costs[0].cost_usd == pytest.approx(64.8)
+        assert primary[0].cost_usd == pytest.approx(64.8)
 
     def test_zero_usage_buckets_are_skipped(self, admin_credentials):
         connector = AnthropicConnector(admin_credentials)
@@ -772,9 +792,14 @@ class TestSchemaConformance:
             workspace_id="ws_x",
         )
         records = c._assemble_unified_costs([dummy_usage], {})
-        assert len(records) == 1
-        assert records[0].model_dump()["platform"] == "anthropic"
-        assert records[0].model_dump()["category"] == "ai_inference"
+        # One primary record + one per-workspace rollup.
+        primary = _non_rollup(records)
+        assert len(primary) == 1
+        assert primary[0].model_dump()["platform"] == "anthropic"
+        assert primary[0].model_dump()["category"] == "ai_inference"
+        rollups = _rollups(records, "workspace")
+        assert len(rollups) == 1
+        assert rollups[0].resource == "workspace:ws_x"
 
     def test_model_pricing_2026_catalog_has_current_models(self):
         for key in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
@@ -784,3 +809,449 @@ class TestSchemaConformance:
         # Historical 3.x still present for back-fills.
         for key in ("claude-haiku-3-5", "claude-3-5-sonnet"):
             assert key in MODEL_PRICING
+
+
+# ===========================================================================
+# Service-tier isolation — priority / priority_on_demand / batch / flex
+# each flow into their own UnifiedCost record with tier-specific pricing.
+# ===========================================================================
+class TestServiceTierIsolation:
+
+    def test_priority_on_demand_multiplier_is_150_percent(self):
+        tokens = TokenUsage(uncached_input_tokens=1_000_000, output_tokens=1_000_000)
+        # 18 * 1.5 = 27.0
+        cost = estimate_cost("claude-sonnet-4-6", tokens, "priority_on_demand")
+        assert cost == pytest.approx(27.0)
+        assert SERVICE_TIER_MULTIPLIERS["priority_on_demand"] == 1.5
+
+    def test_flex_tier_is_50_percent_of_standard(self):
+        tokens = TokenUsage(uncached_input_tokens=1_000_000, output_tokens=1_000_000)
+        cost = estimate_cost("claude-sonnet-4-6", tokens, "flex")
+        assert cost == pytest.approx(9.0)
+        assert SERVICE_TIER_MULTIPLIERS["flex"] == 0.5
+
+    def test_isolated_tiers_set_covers_all_non_standard(self):
+        """Every isolated tier must be in the multipliers map and ≠ standard."""
+        for tier in ISOLATED_SERVICE_TIERS:
+            assert tier in SERVICE_TIER_MULTIPLIERS
+            assert SERVICE_TIER_MULTIPLIERS[tier] != 1.0
+
+    def test_standard_tier_is_not_isolated(self):
+        assert "standard" not in ISOLATED_SERVICE_TIERS
+
+    @pytest.mark.parametrize(
+        "tier,expected_multiplier",
+        [
+            ("standard", 1.0),
+            ("batch", 0.5),
+            ("priority", 1.25),
+            ("priority_on_demand", 1.5),
+            ("flex", 0.5),
+        ],
+    )
+    def test_tier_multiplier_parametrized(self, tier, expected_multiplier):
+        tokens = TokenUsage(uncached_input_tokens=1_000_000, output_tokens=1_000_000)
+        base = 3.0 + 15.0  # Sonnet list
+        cost = estimate_cost("claude-sonnet-4-6", tokens, tier)
+        assert cost == pytest.approx(base * expected_multiplier)
+
+    def test_multiple_tiers_in_one_day_produce_distinct_records(self, admin_credentials):
+        """Mixed-tier same-model traffic on the same day yields one record per tier."""
+        connector = AnthropicConnector(admin_credentials)
+        usage = {
+            "data": [
+                {
+                    "starting_at": "2026-04-20T00:00:00Z",
+                    "results": [
+                        {
+                            "workspace_id": "ws_alpha",
+                            "model": "claude-sonnet-4-6",
+                            "service_tier": "standard",
+                            "uncached_input_tokens": 1_000_000,
+                            "output_tokens": 1_000_000,
+                        },
+                        {
+                            "workspace_id": "ws_alpha",
+                            "model": "claude-sonnet-4-6",
+                            "service_tier": "batch",
+                            "uncached_input_tokens": 2_000_000,
+                            "output_tokens": 2_000_000,
+                        },
+                        {
+                            "workspace_id": "ws_alpha",
+                            "model": "claude-sonnet-4-6",
+                            "service_tier": "priority",
+                            "uncached_input_tokens": 500_000,
+                            "output_tokens": 500_000,
+                        },
+                        {
+                            "workspace_id": "ws_alpha",
+                            "model": "claude-sonnet-4-6",
+                            "service_tier": "priority_on_demand",
+                            "uncached_input_tokens": 100_000,
+                            "output_tokens": 100_000,
+                        },
+                    ],
+                }
+            ],
+            "has_more": False,
+        }
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, usage),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=1)
+
+        primary = _non_rollup(records)
+        tiers = [r.metadata["service_tier"] for r in primary]
+        assert sorted(tiers) == sorted(
+            ["standard", "batch", "priority", "priority_on_demand"]
+        )
+        # Each non-standard tier is tagged isolated_tier=True.
+        for r in primary:
+            expected = r.metadata["service_tier"] in (
+                "batch", "priority", "priority_on_demand", "flex",
+            )
+            assert r.metadata["isolated_tier"] is expected
+
+
+# ===========================================================================
+# Deprecation surfacing — old Claude 3.x models get a notice in metadata
+# ===========================================================================
+class TestDeprecationSurfacing:
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-3-opus-20240229",
+            "claude-3-sonnet",
+            "claude-3-haiku",
+            "claude-3-5-sonnet-20240620",
+            "claude-sonnet-3-5",
+            "claude-3-5-haiku",
+            "claude-haiku-3-5",
+            "claude-3-7-sonnet",
+        ],
+    )
+    def test_deprecated_models_get_notice(self, model):
+        notice = _deprecation_notice(model)
+        assert notice is not None
+        assert "deprecated" in notice.lower()
+
+    def test_current_models_have_no_notice(self):
+        assert _deprecation_notice("claude-opus-4-7") is None
+        assert _deprecation_notice("claude-sonnet-4-6") is None
+        assert _deprecation_notice("claude-haiku-4-5") is None
+
+    def test_none_model_returns_none(self):
+        assert _deprecation_notice(None) is None
+        assert _deprecation_notice("") is None
+
+    def test_longest_prefix_wins_for_3_5(self):
+        """'claude-3-5-sonnet' must hit the 3-5-sonnet notice, not 3-sonnet."""
+        notice = _deprecation_notice("claude-3-5-sonnet")
+        assert "3.5 Sonnet" in notice
+
+    def test_deprecation_notice_in_unified_cost_metadata(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        usage = {
+            "data": [
+                {
+                    "starting_at": "2026-04-20T00:00:00Z",
+                    "results": [
+                        {
+                            "workspace_id": "ws_a",
+                            "model": "claude-3-opus-20240229",
+                            "uncached_input_tokens": 1_000,
+                            "output_tokens": 1_000,
+                        }
+                    ],
+                }
+            ],
+            "has_more": False,
+        }
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, usage),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=1)
+
+        primary = _non_rollup(records)
+        assert len(primary) == 1
+        assert "deprecation_notice" in primary[0].metadata
+        assert "claude-opus-4-7" in primary[0].metadata["deprecation_notice"]
+
+    def test_deprecated_cost_accumulates_into_workspace_rollup(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        usage = {
+            "data": [
+                {
+                    "starting_at": "2026-04-20T00:00:00Z",
+                    "results": [
+                        {
+                            "workspace_id": "ws_a",
+                            "model": "claude-3-opus-20240229",
+                            "uncached_input_tokens": 1_000_000,
+                            "output_tokens": 1_000_000,
+                        },
+                        {
+                            "workspace_id": "ws_a",
+                            "model": "claude-opus-4-7",  # not deprecated
+                            "uncached_input_tokens": 1_000_000,
+                            "output_tokens": 1_000_000,
+                        },
+                    ],
+                }
+            ],
+            "has_more": False,
+        }
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, usage),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=1)
+
+        rollups = _rollups(records, "workspace")
+        assert len(rollups) == 1
+        # Only the claude-3-opus cost should contribute to deprecated_cost_usd.
+        deprecated_cost = rollups[0].metadata["deprecated_cost_usd"]
+        total_cost = rollups[0].cost_usd
+        assert deprecated_cost == pytest.approx(15.0 + 75.0)  # $90 for 1M/1M opus
+        assert total_cost == pytest.approx(2 * 90.0)
+
+
+# ===========================================================================
+# Workspace rollups — feed /api/anomalies per-resource z-score path
+# ===========================================================================
+class TestWorkspaceRollups:
+
+    def test_emit_rollups_default_on(self, admin_credentials):
+        c = AnthropicConnector(admin_credentials)
+        assert c.emit_workspace_rollups is True
+        assert c.emit_api_key_rollups is False
+
+    def test_emit_rollups_can_be_disabled(self):
+        c = AnthropicConnector(
+            {"api_key": "sk-ant-admin-x", "emit_workspace_rollups": False}
+        )
+        assert c.emit_workspace_rollups is False
+
+    def test_no_rollup_when_disabled(self):
+        c = AnthropicConnector(
+            {"api_key": "sk-ant-admin-x", "emit_workspace_rollups": False}
+        )
+        dummy = UsageBucket(
+            date="2026-04-20",
+            model="claude-opus-4-7",
+            tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+            workspace_id="ws_x",
+        )
+        records = c._assemble_unified_costs([dummy], {})
+        assert _rollups(records) == []
+
+    def test_rollup_aggregates_all_models_in_workspace(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, _sample_usage_report_page()),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=3)
+
+        rollups = _rollups(records, "workspace")
+        # Two days, same workspace (ws_alpha) → 2 rollups.
+        assert len(rollups) == 2
+        for r in rollups:
+            assert r.resource == "workspace:ws_alpha"
+            assert r.team == "ws_alpha"
+            assert r.metadata["workspace_id"] == "ws_alpha"
+            assert r.metadata["type"] == "rollup"
+            assert r.metadata["rollup_type"] == "workspace"
+
+    def test_rollup_aggregates_cost_and_tokens(self, admin_credentials):
+        """Rollup cost must equal the sum of its constituent primary records."""
+        connector = AnthropicConnector(admin_credentials)
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, _sample_usage_report_page()),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=3)
+
+        rollups = _rollups(records, "workspace")
+        primary = _non_rollup(records)
+        for rollup in rollups:
+            date = rollup.date
+            workspace = rollup.metadata["workspace_id"]
+            day_primary = [
+                r for r in primary
+                if r.date == date and r.metadata.get("workspace_id") == workspace
+            ]
+            expected_cost = sum(r.cost_usd for r in day_primary)
+            expected_tokens = sum(r.usage_quantity for r in day_primary)
+            assert rollup.cost_usd == pytest.approx(expected_cost)
+            assert rollup.usage_quantity == expected_tokens
+
+    def test_rollup_captures_service_tier_mix(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, _sample_usage_report_page()),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=3)
+
+        day1 = next(
+            r for r in _rollups(records, "workspace")
+            if r.date == "2026-04-20"
+        )
+        # Day 1 had Opus standard + Sonnet batch.
+        assert set(day1.metadata["service_tiers"]) == {"standard", "batch"}
+        assert day1.metadata["has_isolated_tier"] is True
+
+    def test_api_key_rollup_opt_in(self, admin_credentials):
+        creds = dict(admin_credentials)
+        creds["emit_api_key_rollups"] = True
+        connector = AnthropicConnector(creds)
+        seq = _Sequencer(
+            [
+                _fake_response(200, {"data": [], "has_more": False}),
+                _fake_response(200, _sample_usage_report_page()),
+            ]
+        )
+        with patch.object(ac.httpx, "post", side_effect=seq):
+            records = connector.fetch_costs(days=3)
+
+        api_rollups = _rollups(records, "api_key")
+        # Day 1 had 2 distinct api_key_ids (apikey_1, apikey_2). Day 2 had none.
+        assert len(api_rollups) == 2
+        resources = sorted(r.resource for r in api_rollups)
+        assert resources == ["apikey:apikey_1", "apikey:apikey_2"]
+
+    def test_rollup_skipped_when_workspace_missing(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        dummy = UsageBucket(
+            date="2026-04-20",
+            model="claude-opus-4-7",
+            tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+            workspace_id="",  # no workspace
+        )
+        records = connector._assemble_unified_costs([dummy], {})
+        assert _rollups(records, "workspace") == []
+
+
+# ===========================================================================
+# inference_geo as first-class project field on UnifiedCost
+# ===========================================================================
+class TestInferenceGeoAsProject:
+
+    def test_geo_populates_project_field(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        dummy = UsageBucket(
+            date="2026-04-20",
+            model="claude-opus-4-7",
+            tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+            workspace_id="ws_x",
+            inference_geo="eu-west",
+        )
+        records = connector._assemble_unified_costs([dummy], {})
+        primary = _non_rollup(records)[0]
+        assert primary.project == "eu-west"
+
+    def test_geo_empty_leaves_project_none(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        dummy = UsageBucket(
+            date="2026-04-20",
+            model="claude-opus-4-7",
+            tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+            workspace_id="ws_x",
+            inference_geo="",
+        )
+        records = connector._assemble_unified_costs([dummy], {})
+        primary = _non_rollup(records)[0]
+        assert primary.project is None
+
+    def test_rollup_collects_geo_set(self, admin_credentials):
+        connector = AnthropicConnector(admin_credentials)
+        buckets = [
+            UsageBucket(
+                date="2026-04-20",
+                model="claude-opus-4-7",
+                tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+                workspace_id="ws_x",
+                inference_geo="us-east",
+            ),
+            UsageBucket(
+                date="2026-04-20",
+                model="claude-sonnet-4-6",
+                tokens=TokenUsage(uncached_input_tokens=1, output_tokens=1),
+                workspace_id="ws_x",
+                inference_geo="eu-west",
+            ),
+        ]
+        records = connector._assemble_unified_costs(buckets, {})
+        rollup = _rollups(records, "workspace")[0]
+        assert set(rollup.metadata["inference_geos"]) == {"us-east", "eu-west"}
+
+
+# ===========================================================================
+# Parametrized — workspace × service_tier × geo combinations round-trip
+# ===========================================================================
+class TestParametrizedDimensions:
+
+    @pytest.mark.parametrize(
+        "workspace_id,service_tier,inference_geo",
+        [
+            ("ws_alpha", "standard", "us-east"),
+            ("ws_alpha", "batch", "us-east"),
+            ("ws_alpha", "priority", "eu-west"),
+            ("ws_alpha", "priority_on_demand", "eu-west"),
+            ("ws_beta", "standard", "jp-central"),
+            ("ws_beta", "flex", "us-east"),
+            ("ws_gamma", "batch", ""),  # unset geo
+            ("", "standard", "us-east"),  # unset workspace
+        ],
+    )
+    def test_round_trip_preserves_dimensions(
+        self, admin_credentials, workspace_id, service_tier, inference_geo
+    ):
+        connector = AnthropicConnector(admin_credentials)
+        dummy = UsageBucket(
+            date="2026-04-20",
+            model="claude-opus-4-7",
+            tokens=TokenUsage(uncached_input_tokens=1_000, output_tokens=1_000),
+            workspace_id=workspace_id,
+            service_tier=service_tier,
+            inference_geo=inference_geo,
+        )
+        records = connector._assemble_unified_costs([dummy], {})
+        primary = _non_rollup(records)
+        assert len(primary) == 1
+        r = primary[0]
+        assert r.metadata["workspace_id"] == workspace_id
+        assert r.metadata["service_tier"] == service_tier
+        assert r.metadata["inference_geo"] == inference_geo
+        assert r.team == (workspace_id or None)
+        assert r.project == (inference_geo or None)
+        # Rollup is emitted iff workspace is set.
+        rollup_list = _rollups(records, "workspace")
+        if workspace_id:
+            assert len(rollup_list) == 1
+            assert rollup_list[0].metadata["workspace_id"] == workspace_id
+        else:
+            assert rollup_list == []

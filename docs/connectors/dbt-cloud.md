@@ -300,7 +300,7 @@ Full doc paths worth indexing:
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/dbt_cloud_connector.py`
+File: `backend/app/services/connectors/dbt_cloud_connector.py`
 
 What it does well:
 - Correctly paginates `/runs/` with `total_count` termination.

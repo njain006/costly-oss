@@ -2,7 +2,7 @@
 
 Parses local Claude Code session transcripts (JSONL files under
 ~/.claude/projects/**/*.jsonl) and produces UnifiedCost records with
-cache-tier-aware pricing.
+cache-tier-aware pricing and per-tool-call cost attribution.
 
 Covers subscription (Claude Code Max/Pro) traffic that the Anthropic
 Admin API does NOT expose.
@@ -15,8 +15,14 @@ Schema of a JSONL assistant entry (as of Claude Code ~2026-04):
       "sessionId": "uuid",
       "cwd": "/abs/path/to/project",
       "gitBranch": "main",
+      "requestId": "req_...",
       "message": {
         "model": "claude-opus-4-6",
+        "content": [
+          {"type": "text", "text": "I'll read that file."},
+          {"type": "tool_use", "id": "toolu_...", "name": "Read",
+           "input": {"file_path": "/abs/path"}}
+        ],
         "usage": {
           "input_tokens": 3,
           "output_tokens": 512,
@@ -30,13 +36,18 @@ Schema of a JSONL assistant entry (as of Claude Code ~2026-04):
         }
       }
     }
+
+Per-tool-call attribution is approximate: JSONLs only record a single
+aggregate `output_tokens` per assistant turn, so we weight each content
+block by its JSON-serialised character count and split the output cost
+proportionally across the tool names that appear in that turn.
 """
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -74,6 +85,26 @@ CACHE_WRITE_1H_MULTIPLIER = 2.00
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
+# Tool names we consider "built-in" for grouping in the UI. Everything else
+# (including MCP servers, prefixed mcp__server__tool) is preserved verbatim
+# but can still be filtered/sliced by the caller on `name.startswith("mcp__")`.
+BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "NotebookEdit",
+        "TodoWrite",
+        "Task",
+        "Skill",
+    }
+)
+
 
 @dataclass(frozen=True)
 class TokenUsage:
@@ -105,6 +136,46 @@ class TokenUsage:
             cache_write_5m_tokens=self.cache_write_5m_tokens + other.cache_write_5m_tokens,
             cache_write_1h_tokens=self.cache_write_1h_tokens + other.cache_write_1h_tokens,
         )
+
+
+@dataclass(frozen=True)
+class ToolAttribution:
+    """Per-tool slice of a single assistant turn's output.
+
+    `output_tokens` and `cost_usd` are *approximate* — they share the turn's
+    total in proportion to the JSON-serialised size of each tool_use block.
+    Pure-text turns have no attribution; those skip the per-tool bucket.
+    """
+
+    name: str
+    calls: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def __add__(self, other: "ToolAttribution") -> "ToolAttribution":
+        if not isinstance(other, ToolAttribution):
+            return NotImplemented
+        if self.name != other.name:
+            raise ValueError(
+                f"Cannot add ToolAttribution across tools: {self.name!r} vs {other.name!r}"
+            )
+        return ToolAttribution(
+            name=self.name,
+            calls=self.calls + other.calls,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cost_usd=round(self.cost_usd + other.cost_usd, 6),
+        )
+
+
+@dataclass(frozen=True)
+class TurnAttribution:
+    """All tool-use slices for a single assistant turn."""
+
+    tools: tuple[ToolAttribution, ...] = ()
+
+    @property
+    def total_calls(self) -> int:
+        return sum(t.calls for t in self.tools)
 
 
 def _resolve_pricing(model: str) -> dict[str, float]:
@@ -159,8 +230,86 @@ def project_name_from_cwd(cwd: str | None, fallback_dir_name: str) -> str:
     return fallback_dir_name.lstrip("-")
 
 
-def _parse_turn(raw: dict) -> tuple[datetime, str, str, str | None, TokenUsage] | None:
-    """Extract (timestamp, session_id, model, cwd, usage) from one JSONL row.
+def _content_block_weight(block: dict) -> int:
+    """Character weight used to split aggregate output_tokens across blocks.
+
+    For tool_use we count the JSON-serialised length of the input payload
+    (that's what the server tokenised). For text/thinking we use the string
+    length. Unknown block types get zero weight, which safely excludes them.
+    """
+    btype = block.get("type")
+    if btype == "tool_use":
+        payload = block.get("input") or {}
+        try:
+            return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+        except (TypeError, ValueError):
+            return 0
+    if btype == "text":
+        return len(block.get("text") or "")
+    if btype == "thinking":
+        return len(block.get("thinking") or "")
+    return 0
+
+
+def _attribute_tools(
+    content: list[dict],
+    output_tokens: int,
+    output_cost_usd: float,
+) -> TurnAttribution:
+    """Split a turn's output_tokens/cost across tool_use blocks by JSON weight.
+
+    Blocks with `type == "tool_use"` compete with text/thinking blocks for a
+    share of the aggregate output. Multiple calls to the same tool in one
+    turn are merged (`calls` incremented, tokens/cost summed).
+
+    If the turn has no tool_use blocks, returns an empty TurnAttribution.
+    """
+    if not content or output_tokens <= 0:
+        return TurnAttribution()
+
+    weights: list[tuple[dict, int]] = []
+    total_weight = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        w = _content_block_weight(block)
+        weights.append((block, w))
+        total_weight += w
+
+    if total_weight == 0:
+        return TurnAttribution()
+
+    by_tool: dict[str, ToolAttribution] = {}
+    for block, w in weights:
+        if block.get("type") != "tool_use" or w == 0:
+            continue
+        name = str(block.get("name") or "unknown")
+        share = w / total_weight
+        tokens = int(round(output_tokens * share))
+        cost = round(output_cost_usd * share, 6)
+        existing = by_tool.get(name)
+        if existing is None:
+            by_tool[name] = ToolAttribution(
+                name=name, calls=1, output_tokens=tokens, cost_usd=cost
+            )
+        else:
+            by_tool[name] = ToolAttribution(
+                name=name,
+                calls=existing.calls + 1,
+                output_tokens=existing.output_tokens + tokens,
+                cost_usd=round(existing.cost_usd + cost, 6),
+            )
+
+    if not by_tool:
+        return TurnAttribution()
+
+    return TurnAttribution(tools=tuple(sorted(by_tool.values(), key=lambda t: t.name)))
+
+
+def _parse_turn(
+    raw: dict,
+) -> tuple[datetime, str, str, str | None, TokenUsage, TurnAttribution] | None:
+    """Extract (timestamp, session_id, model, cwd, usage, tool_attr) from one JSONL row.
 
     Returns None for rows we don't care about (user messages, attachments,
     system events, or assistant turns with no token usage).
@@ -206,13 +355,22 @@ def _parse_turn(raw: dict) -> tuple[datetime, str, str, str | None, TokenUsage] 
     if usage.total == 0:
         return None
 
-    return ts, session_id, model, cwd, usage
+    # Output-only cost (for per-tool split). Cache + input costs stay on the
+    # parent turn — they're a consequence of the prompt, not the tool calls.
+    price = _resolve_pricing(model)
+    output_cost_usd = round(usage.output_tokens * price["output"] / 1_000_000.0, 6)
+    content = message.get("content")
+    if not isinstance(content, list):
+        content = []
+    tool_attr = _attribute_tools(content, usage.output_tokens, output_cost_usd)
+
+    return ts, session_id, model, cwd, usage, tool_attr
 
 
 def iter_jsonl_turns(
     projects_dir: Path,
-) -> Iterator[tuple[datetime, str, str, str | None, str, TokenUsage]]:
-    """Yield one tuple per assistant turn: (ts, session, model, cwd, project_dir_name, usage)."""
+) -> Iterator[tuple[datetime, str, str, str | None, str, TokenUsage, TurnAttribution]]:
+    """Yield one tuple per assistant turn: (ts, session, model, cwd, project_dir_name, usage, tool_attr)."""
     if not projects_dir.exists():
         return
     for project_path in sorted(projects_dir.iterdir()):
@@ -232,34 +390,69 @@ def iter_jsonl_turns(
                         parsed = _parse_turn(raw)
                         if parsed is None:
                             continue
-                        ts, session_id, model, cwd, usage = parsed
-                        yield ts, session_id, model, cwd, project_path.name, usage
+                        ts, session_id, model, cwd, usage, tool_attr = parsed
+                        yield ts, session_id, model, cwd, project_path.name, usage, tool_attr
             except OSError:
                 continue
 
 
+@dataclass
+class _Bucket:
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    tool_tokens: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    tool_cost: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    tool_calls: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+
+
+def _build_tool_breakdown(bucket: _Bucket) -> dict[str, dict[str, float]]:
+    """Serialise a bucket's per-tool attribution into metadata-friendly dicts."""
+    out: dict[str, dict[str, float]] = {}
+    for name in sorted(bucket.tool_tokens.keys()):
+        out[name] = {
+            "calls": int(bucket.tool_calls[name]),
+            "output_tokens": int(bucket.tool_tokens[name]),
+            "cost_usd": round(bucket.tool_cost[name], 6),
+            "is_mcp": name.startswith("mcp__"),
+            "is_builtin": name in BUILTIN_TOOL_NAMES,
+        }
+    return out
+
+
 def aggregate_costs(
-    turns: Iterable[tuple[datetime, str, str, str | None, str, TokenUsage]],
+    turns: Iterable[tuple[datetime, str, str, str | None, str, TokenUsage, TurnAttribution]],
     since: datetime | None = None,
 ) -> list[UnifiedCost]:
-    """Aggregate per-turn tuples into UnifiedCost records, one per (day, project, model)."""
-    buckets: dict[tuple[str, str, str], TokenUsage] = defaultdict(TokenUsage)
+    """Aggregate per-turn tuples into UnifiedCost records, one per (day, project, model).
+
+    Each record carries a `tool_breakdown` in `metadata` keyed by tool name
+    (Bash, Read, mcp__foo__bar, ...) mapped to {calls, output_tokens, cost_usd,
+    is_mcp, is_builtin}. Turns without tool_use contribute to the record but
+    do not add to the breakdown.
+    """
+    buckets: dict[tuple[str, str, str], _Bucket] = defaultdict(_Bucket)
     cwd_by_project: dict[str, str] = {}
 
-    for ts, _session_id, model, cwd, project_dir_name, usage in turns:
+    for ts, _session_id, model, cwd, project_dir_name, usage, tool_attr in turns:
         if since is not None and ts < since:
             continue
         date_key = ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
         project = project_name_from_cwd(cwd, project_dir_name)
-        buckets[(date_key, project, model)] += usage
+        key = (date_key, project, model)
+        bucket = buckets[key]
+        bucket.usage = bucket.usage + usage
+        for tool in tool_attr.tools:
+            bucket.tool_tokens[tool.name] += tool.output_tokens
+            bucket.tool_cost[tool.name] += tool.cost_usd
+            bucket.tool_calls[tool.name] += tool.calls
         if cwd and project not in cwd_by_project:
             cwd_by_project[project] = cwd
 
     results: list[UnifiedCost] = []
-    for (date_key, project, model), usage in sorted(buckets.items()):
-        cost = estimate_cost(model, usage)
+    for (date_key, project, model), bucket in sorted(buckets.items()):
+        cost = estimate_cost(model, bucket.usage)
         if cost <= 0:
             continue
+        tool_breakdown = _build_tool_breakdown(bucket)
         results.append(
             UnifiedCost(
                 date=date_key,
@@ -268,18 +461,20 @@ def aggregate_costs(
                 resource=model,
                 category=CostCategory.ai_inference,
                 cost_usd=cost,
-                usage_quantity=usage.total,
+                usage_quantity=bucket.usage.total,
                 usage_unit="tokens",
                 team=project,
                 metadata={
                     "model": model,
                     "project": project,
                     "cwd": cwd_by_project.get(project),
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "cache_read_tokens": usage.cache_read_tokens,
-                    "cache_write_5m_tokens": usage.cache_write_5m_tokens,
-                    "cache_write_1h_tokens": usage.cache_write_1h_tokens,
+                    "input_tokens": bucket.usage.input_tokens,
+                    "output_tokens": bucket.usage.output_tokens,
+                    "cache_read_tokens": bucket.usage.cache_read_tokens,
+                    "cache_write_5m_tokens": bucket.usage.cache_write_5m_tokens,
+                    "cache_write_1h_tokens": bucket.usage.cache_write_1h_tokens,
+                    "tool_breakdown": tool_breakdown,
+                    "tool_calls_total": sum(bucket.tool_calls.values()),
                 },
             )
         )

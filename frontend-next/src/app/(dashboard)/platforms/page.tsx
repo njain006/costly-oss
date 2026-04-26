@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { Suspense, useState, useCallback, useMemo, useEffect } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/use-api";
 import api from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
@@ -116,6 +117,26 @@ const CONNECTORS: ConnectorDef[] = [
       { key: "workspace_url", label: "Workspace URL", type: "text", placeholder: "https://xxx.cloud.databricks.com" },
     ],
   },
+  {
+    key: "redshift",
+    label: "Redshift",
+    category: "Cloud & Warehouses",
+    emoji: "🟥",
+    description:
+      "First-class Redshift connector — SYS_QUERY_HISTORY attribution, Serverless RPU, Spectrum scans, and Concurrency Scaling tracked per cluster/workgroup.",
+    accentColor: "bg-rose-50 border-rose-100",
+    badgeColor: "bg-rose-100 text-rose-700",
+    fields: [
+      { key: "aws_access_key_id", label: "Access Key ID", type: "text", placeholder: "AKIA..." },
+      { key: "aws_secret_access_key", label: "Secret Access Key", type: "password", placeholder: "Secret key" },
+      { key: "region", label: "Region", type: "text", placeholder: "us-east-1" },
+      { key: "cluster_identifier", label: "Cluster Identifier (provisioned)", type: "text", placeholder: "analytics-prod" },
+      { key: "workgroup_name", label: "Workgroup Name (serverless, optional)", type: "text", placeholder: "analytics-wg" },
+      { key: "database", label: "Database", type: "text", placeholder: "dev" },
+      { key: "db_user", label: "DB User (IAM auth)", type: "text", placeholder: "costly_reader" },
+      { key: "secret_arn", label: "Secrets Manager ARN (optional)", type: "text", placeholder: "arn:aws:secretsmanager:..." },
+    ],
+  },
   // Data Pipelines
   {
     key: "dbt_cloud",
@@ -172,14 +193,26 @@ const CONNECTORS: ConnectorDef[] = [
   },
   {
     key: "anthropic",
-    label: "Anthropic",
+    label: "Anthropic API",
     category: "AI & ML",
     emoji: "⚡",
-    description: "Token usage and cost tracking — Opus, Sonnet, and Haiku model tiers.",
+    description: "Anthropic API traffic — per-workspace, per-model, cache tiers, batch/flex discounts. Requires an Admin API key from console.anthropic.com → Settings → Admin Keys.",
     accentColor: "bg-purple-50 border-purple-100",
     badgeColor: "bg-purple-100 text-purple-700",
     fields: [
       { key: "api_key", label: "Admin API Key", type: "password", placeholder: "sk-ant-admin-..." },
+    ],
+  },
+  {
+    key: "claude_code",
+    label: "Claude Code",
+    category: "AI & ML",
+    emoji: "🤖",
+    description: "Claude Code subscription (Max/Pro) usage — parses local session transcripts. Set the path to your ~/.claude/projects directory. Self-hosted only; complements the Anthropic API connector.",
+    accentColor: "bg-rose-50 border-rose-100",
+    badgeColor: "bg-rose-100 text-rose-700",
+    fields: [
+      { key: "projects_dir", label: "Projects directory", type: "text", placeholder: "~/.claude/projects" },
     ],
   },
   {
@@ -311,11 +344,48 @@ function ConnectDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Claude Code JSONL upload state (hosted-mode alternative to filesystem path)
+  const [uploadFiles, setUploadFiles] = useState<FileList | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{
+    records: number;
+    turns_parsed: number;
+    files: number;
+    total_cost_usd: number;
+  } | null>(null);
+
   const handleClose = () => {
     onOpenChange(false);
     setConnName("");
     setCredentials({});
     setError(null);
+    setUploadFiles(null);
+    setUploadResult(null);
+  };
+
+  const handleUpload = async () => {
+    if (!uploadFiles || uploadFiles.length === 0) return;
+    setUploading(true);
+    setError(null);
+    setUploadResult(null);
+    try {
+      const form = new FormData();
+      for (const f of Array.from(uploadFiles)) form.append("files", f);
+      const result = await api.post<unknown, {
+        records: number;
+        turns_parsed: number;
+        files: number;
+        total_cost_usd: number;
+      }>("/platforms/claude-code/upload", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setUploadResult(result);
+      onSuccess();
+    } catch (err) {
+      setError(typeof err === "string" ? err : "Upload failed. Make sure the files are Claude Code JSONL transcripts.");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleConnect = async () => {
@@ -403,6 +473,88 @@ function ConnectDialog({
               )}
             </div>
           ))}
+
+          {/* Claude Code: JSONL upload alternative to filesystem path.
+              The filesystem path only works if the backend can read the
+              user's ~/.claude/projects (i.e. self-hosted with a docker
+              volume mount). Hosted users upload files directly instead. */}
+          {connector.key === "claude_code" && (
+            <div className="border-t border-slate-200 pt-4 mt-2">
+              <div className="flex items-baseline justify-between">
+                <Label className="text-sm font-semibold">Or upload JSONL files</Label>
+                <span className="text-[0.65rem] text-slate-400 uppercase tracking-wider">For hosted users</span>
+              </div>
+
+              <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">
+                <p className="font-medium text-slate-800 mb-1">Where to find the files:</p>
+                <ul className="space-y-0.5 pl-4 list-disc">
+                  <li>
+                    macOS / Linux: <span className="font-mono">~/.claude/projects/</span>
+                  </li>
+                  <li>
+                    Windows: <span className="font-mono">%USERPROFILE%\.claude\projects\</span>
+                  </li>
+                  <li>Each project has its own folder (e.g. <span className="font-mono">-Users-jain-src/</span>)</li>
+                  <li>Inside each folder: one <span className="font-mono">*.jsonl</span> file per session</li>
+                </ul>
+                <p className="mt-2 font-medium text-slate-800">Can&apos;t see the <span className="font-mono">.claude</span> folder? It&apos;s hidden by default. Three ways in:</p>
+                <ol className="mt-1 space-y-0.5 pl-4 list-decimal text-slate-600">
+                  <li>
+                    In the file picker, press <kbd className="font-mono text-[0.7rem] bg-slate-200 px-1 py-0.5 rounded">⇧⌘.</kbd> to toggle hidden files (Mac) /{" "}
+                    <kbd className="font-mono text-[0.7rem] bg-slate-200 px-1 py-0.5 rounded">Ctrl+H</kbd> (Linux)
+                  </li>
+                  <li>
+                    Press <kbd className="font-mono text-[0.7rem] bg-slate-200 px-1 py-0.5 rounded">⇧⌘G</kbd> in the picker and paste <span className="font-mono">~/.claude/projects</span>
+                  </li>
+                  <li>
+                    Run <span className="font-mono">open ~/.claude/projects</span> in Terminal first, then drag files from that Finder window into the picker below
+                  </li>
+                </ol>
+                <p className="mt-2 text-slate-500">
+                  Limits: 100MB per file, 500MB per upload.
+                </p>
+              </div>
+
+              <input
+                type="file"
+                multiple
+                accept=".jsonl,application/x-ndjson,application/json,text/plain"
+                onChange={(e) => setUploadFiles(e.target.files)}
+                className="mt-3 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-indigo-700 file:cursor-pointer"
+              />
+
+              {uploadFiles && uploadFiles.length > 0 && !uploadResult && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {uploadFiles.length} file{uploadFiles.length === 1 ? "" : "s"} selected ·{" "}
+                  {Math.round(Array.from(uploadFiles).reduce((s, f) => s + f.size, 0) / 1024 / 1024)} MB total
+                </p>
+              )}
+
+              {uploadResult && (
+                <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">
+                  <div className="font-semibold">✓ Uploaded successfully</div>
+                  <div className="text-xs mt-1 text-emerald-800">
+                    {uploadResult.files} file(s) · {uploadResult.turns_parsed.toLocaleString()} turns parsed ·{" "}
+                    {uploadResult.records} cost record(s) · ${uploadResult.total_cost_usd.toLocaleString()} total
+                  </div>
+                  <div className="text-xs mt-1 text-emerald-700">
+                    Your data is on the AI Costs page now.
+                  </div>
+                </div>
+              )}
+
+              <Button
+                onClick={handleUpload}
+                disabled={uploading || !uploadFiles || uploadFiles.length === 0}
+                variant="outline"
+                className="mt-3 w-full gap-2"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {uploading ? "Parsing files…" : "Upload & parse"}
+              </Button>
+            </div>
+          )}
+
           {error && (
             <p className="text-sm text-red-500 bg-red-50 border border-red-100 rounded-md px-3 py-2">
               {error}
@@ -537,12 +689,36 @@ function ConnectedRow({
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PlatformsPage() {
+  // useSearchParams requires a Suspense boundary per Next.js 15.
+  return (
+    <Suspense fallback={null}>
+      <PlatformsPageInner />
+    </Suspense>
+  );
+}
+
+function PlatformsPageInner() {
   const { data: connections, loading, refetch } = useApi<PlatformConnection[]>("/platforms");
   const { data: sfStatus } = useApi<{ has_connection: boolean }>("/connections/status");
   const [search, setSearch] = useState("");
   const [activeConnector, setActiveConnector] = useState<ConnectorDef | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
+
+  // Honor ?add=<connector_key> deep-link from the Setup page.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    const addKey = searchParams.get("add");
+    if (!addKey) return;
+    const target = CONNECTORS.find((c) => c.key === addKey);
+    if (target) {
+      setActiveConnector(target);
+      setDialogOpen(true);
+      // Clear the query param so refresh doesn't re-open.
+      router.replace("/platforms");
+    }
+  }, [searchParams, router]);
 
   const connectedKeys = useMemo(() => {
     const keys = new Set((connections ?? []).map((c) => c.platform));
@@ -624,7 +800,7 @@ export default function PlatformsPage() {
             <p className="text-xs text-slate-500">Connected</p>
             <p className="text-lg font-bold text-slate-900 leading-tight">
               {connectedCount}{" "}
-              <span className="text-sm font-normal text-slate-400">of 15 platforms</span>
+              <span className="text-sm font-normal text-slate-400">of 16 platforms</span>
             </p>
           </div>
         </div>

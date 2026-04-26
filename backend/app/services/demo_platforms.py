@@ -14,11 +14,79 @@ def _date_range(days: int) -> list[str]:
 
 
 def generate_demo_platform_connections() -> list[dict]:
+    """Return a list of "connected" platforms for the demo /platforms page.
+
+    Shape matches the real ``GET /api/platforms`` endpoint exactly
+    (``id``, ``platform``, ``name``, ``created_at``, ``last_synced``,
+    ``pricing_overrides``) so the connected-badge UI renders correctly.
+    """
+    now = datetime.utcnow()
+    now_iso = now.isoformat()
+    # Use deterministic-looking ids and a small spread of sync timestamps
+    # so the page doesn't look like everything synced a millisecond ago.
+    def _synced(hours_ago: int) -> str:
+        return (now - timedelta(hours=hours_ago)).isoformat()
+
+    def _created(days_ago_: int) -> str:
+        return (now - timedelta(days=days_ago_)).isoformat()
+
     return [
-        {"platform": "snowflake", "name": "Production Snowflake", "last_synced": datetime.utcnow().isoformat()},
-        {"platform": "aws", "name": "AWS Data Platform", "last_synced": datetime.utcnow().isoformat()},
-        {"platform": "dbt_cloud", "name": "dbt Cloud - Production", "last_synced": datetime.utcnow().isoformat()},
-        {"platform": "openai", "name": "OpenAI API", "last_synced": datetime.utcnow().isoformat()},
+        {
+            "id": "demo_conn_snowflake",
+            "platform": "snowflake",
+            "name": "Production Snowflake",
+            "created_at": _created(86),
+            "last_synced": _synced(1),
+            "pricing_overrides": {"credit_price": 2.85},
+        },
+        {
+            "id": "demo_conn_aws",
+            "platform": "aws",
+            "name": "AWS Data Platform",
+            "created_at": _created(74),
+            "last_synced": _synced(2),
+            "pricing_overrides": {"edp_discount_pct": 8},
+        },
+        {
+            "id": "demo_conn_dbt",
+            "platform": "dbt_cloud",
+            "name": "dbt Cloud — Production",
+            "created_at": _created(54),
+            "last_synced": _synced(3),
+            "pricing_overrides": None,
+        },
+        {
+            "id": "demo_conn_openai",
+            "platform": "openai",
+            "name": "OpenAI API",
+            "created_at": _created(42),
+            "last_synced": _synced(2),
+            "pricing_overrides": None,
+        },
+        {
+            "id": "demo_conn_anthropic",
+            "platform": "anthropic",
+            "name": "Anthropic API",
+            "created_at": _created(38),
+            "last_synced": _synced(4),
+            "pricing_overrides": None,
+        },
+        {
+            "id": "demo_conn_gemini",
+            "platform": "gemini",
+            "name": "Gemini (Vertex AI)",
+            "created_at": _created(21),
+            "last_synced": _synced(5),
+            "pricing_overrides": None,
+        },
+        {
+            "id": "demo_conn_github",
+            "platform": "github",
+            "name": "GitHub Actions — costly-oss",
+            "created_at": _created(18),
+            "last_synced": _synced(6),
+            "pricing_overrides": None,
+        },
     ]
 
 

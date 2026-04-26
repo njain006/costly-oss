@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class PlatformType(str, Enum):
     snowflake = "snowflake"
     aws = "aws"
+    redshift = "redshift"
     gcp = "gcp"
     dbt_cloud = "dbt_cloud"
     fivetran = "fivetran"

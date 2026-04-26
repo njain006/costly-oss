@@ -22,3 +22,4 @@ pytest
 pytest-asyncio
 pytest-cov
 databricks-sql-connector>=3.0.0
+python-multipart>=0.0.9

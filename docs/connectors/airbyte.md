@@ -277,7 +277,7 @@ What dashboards typically surface:
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/airbyte_connector.py`
+File: `backend/app/services/connectors/airbyte_connector.py`
 
 What it does well:
 - Distinguishes Cloud vs non-Cloud via `self.is_cloud` check on URL.

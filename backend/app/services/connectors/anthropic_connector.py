@@ -72,11 +72,25 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
 }
 
 # Service-tier multipliers applied on top of standard list price.
+#
+# ``priority`` — committed-capacity priority tier (25% premium; budget line that
+# caps well because capacity is reserved).
+# ``priority_on_demand`` — burst priority tier (50% premium; unbounded, so we
+# track it as its own record so the budget-alerting path can isolate it).
+# ``flex`` — opportunistic spot-style tier (50% discount vs standard, no SLA).
 SERVICE_TIER_MULTIPLIERS: dict[str, float] = {
     "standard": 1.0,
     "batch": 0.5,
+    "flex": 0.5,
     "priority": 1.25,
+    "priority_on_demand": 1.5,
 }
+
+# Service tiers that must never be silently collapsed into ``standard`` — each
+# gets its own UnifiedCost record so budget tracking can isolate spend.
+ISOLATED_SERVICE_TIERS: frozenset[str] = frozenset(
+    {"priority", "priority_on_demand", "batch", "flex"}
+)
 
 # Cache-tier multipliers for input tokens.
 # - cache_read: 10% of standard input rate (cached hit).
@@ -90,6 +104,33 @@ CACHE_TIER_MULTIPLIERS: dict[str, float] = {
 
 # Fallback pricing when the model id is unrecognised (mid-tier Sonnet).
 _FALLBACK_PRICING = {"input": 3.0, "output": 15.0}
+
+# Deprecated model families. The Admin API still bills for these, but we
+# surface a ``deprecation_notice`` in metadata so dashboards can flag
+# migration work. Source:
+# https://docs.anthropic.com/en/docs/resources/model-deprecations
+DEPRECATED_MODELS: dict[str, str] = {
+    "claude-3-opus": "Claude 3 Opus is deprecated — migrate to claude-opus-4-7",
+    "claude-3-sonnet": "Claude 3 Sonnet is deprecated — migrate to claude-sonnet-4-6",
+    "claude-3-haiku": "Claude 3 Haiku is deprecated — migrate to claude-haiku-4-5",
+    "claude-3-5-sonnet": "Claude 3.5 Sonnet is deprecated — migrate to claude-sonnet-4-6",
+    "claude-sonnet-3-5": "Claude 3.5 Sonnet is deprecated — migrate to claude-sonnet-4-6",
+    "claude-3-5-haiku": "Claude 3.5 Haiku is deprecated — migrate to claude-haiku-4-5",
+    "claude-haiku-3-5": "Claude 3.5 Haiku is deprecated — migrate to claude-haiku-4-5",
+    "claude-3-7-sonnet": "Claude 3.7 Sonnet is deprecated — migrate to claude-sonnet-4-6",
+}
+
+
+def _deprecation_notice(model: str | None) -> str | None:
+    """Return a human-readable deprecation warning for deprecated models."""
+    if not model:
+        return None
+    model_lower = model.lower()
+    # Longest-prefix match so "claude-3-5-sonnet" beats "claude-3-sonnet".
+    for key in sorted(DEPRECATED_MODELS.keys(), key=lambda x: -len(x)):
+        if key in model_lower:
+            return DEPRECATED_MODELS[key]
+    return None
 
 _ADMIN_KEY_PREFIX = "sk-ant-admin"
 _ANTHROPIC_BASE = "https://api.anthropic.com/v1"
@@ -354,6 +395,19 @@ class AnthropicConnector(BaseConnector):
         self.api_key: str = credentials["api_key"]
         self.base_url: str = credentials.get("base_url", _ANTHROPIC_BASE).rstrip("/")
         self.pricing_overrides: dict = credentials.get("pricing_overrides") or {}
+        # Emit per-workspace daily rollup records so anomaly_detector
+        # naturally surfaces workspace-level spikes on /api/anomalies.
+        # Rollups are tagged ``metadata.type="rollup"`` so downstream consumers
+        # (e.g. /api/ai-costs totals) can filter them out to avoid double-counting.
+        # Default: True (this is the primary new analytic surface).
+        self.emit_workspace_rollups: bool = bool(
+            credentials.get("emit_workspace_rollups", True)
+        )
+        # Emit per-api_key daily rollup records (opt-in — can balloon record
+        # count for orgs with hundreds of keys).
+        self.emit_api_key_rollups: bool = bool(
+            credentials.get("emit_api_key_rollups", False)
+        )
 
     # ------------------------------------------------------------------
     # test_connection
@@ -578,12 +632,35 @@ class AnthropicConnector(BaseConnector):
         usage_buckets: list[UsageBucket],
         cost_rows: dict[tuple, float],
     ) -> list[UnifiedCost]:
-        """Merge usage tokens + authoritative USD into UnifiedCost records."""
+        """Merge usage tokens + authoritative USD into UnifiedCost records.
+
+        The output is a flat list of ``UnifiedCost`` records keyed by
+        ``(date, workspace_id, api_key_id, model, service_tier, context_window,
+        inference_geo)``. Isolated service tiers (batch / priority /
+        priority_on_demand / flex) always get their own records so budget
+        tracking and anomaly detection can flag tier-specific spikes.
+
+        When ``self.emit_workspace_rollups`` is True (default), we also emit
+        synthetic per-workspace-per-day rollup records with
+        ``resource=f"workspace:{workspace_id}"`` and
+        ``metadata.rollup_type="workspace"``. These feed the anomaly detector's
+        per-resource z-score path so ``/api/anomalies`` naturally surfaces
+        "workspace X spiked today" without any extra MongoDB aggregation.
+        Rollup records are tagged ``metadata.type="rollup"`` so the AI-costs
+        dashboard can filter them out of totals.
+
+        When ``self.emit_api_key_rollups`` is True, we also emit per-api_key
+        rollup records with ``resource=f"apikey:{api_key_id}"``.
+        """
         unified: list[UnifiedCost] = []
 
         # Track which cost_rows were consumed by usage_buckets so any
         # unattributed cost rows (e.g. web-search surcharges) still surface.
         consumed_keys: set[tuple] = set()
+
+        # Used to build per-workspace and per-api_key rollup records.
+        workspace_rollup: dict[tuple[str, str], dict[str, Any]] = {}
+        api_key_rollup: dict[tuple[str, str, str], dict[str, Any]] = {}
 
         for bucket in usage_buckets:
             # Try matching by exact model description first, fall back to the
@@ -605,7 +682,11 @@ class AnthropicConnector(BaseConnector):
             if cost_usd == 0 and bucket.tokens.total_tokens == 0:
                 continue
 
-            metadata = {
+            tier_lower = (bucket.service_tier or "standard").lower()
+            isolated_tier = tier_lower in ISOLATED_SERVICE_TIERS
+            deprecation = _deprecation_notice(bucket.model)
+
+            metadata: dict[str, Any] = {
                 **bucket.tokens.as_metadata(),
                 "model": bucket.model,
                 "service_tier": bucket.service_tier,
@@ -615,7 +696,10 @@ class AnthropicConnector(BaseConnector):
                 "inference_geo": bucket.inference_geo,
                 "speed": bucket.speed,
                 "cost_source": cost_source,
+                "isolated_tier": isolated_tier,
             }
+            if deprecation:
+                metadata["deprecation_notice"] = deprecation
 
             unified.append(
                 UnifiedCost(
@@ -628,9 +712,55 @@ class AnthropicConnector(BaseConnector):
                     usage_quantity=bucket.tokens.total_tokens,
                     usage_unit="tokens",
                     team=bucket.workspace_id or None,
+                    # Surface inference_geo as the first-class ``project`` field
+                    # so data-residency dashboards can group on it without
+                    # reaching into metadata.
+                    project=bucket.inference_geo or None,
                     metadata=metadata,
                 )
             )
+
+            # Accumulate rollups — key includes service_tier so a "priority"
+            # rollup stays distinct from a "standard" rollup.
+            if self.emit_workspace_rollups and bucket.workspace_id:
+                ws_key = (bucket.date, bucket.workspace_id)
+                entry = workspace_rollup.setdefault(
+                    ws_key,
+                    {
+                        "cost_usd": 0.0,
+                        "tokens": 0,
+                        "tiers": set(),
+                        "models": set(),
+                        "geos": set(),
+                        "cache_read_tokens": 0,
+                        "deprecated_cost_usd": 0.0,
+                    },
+                )
+                entry["cost_usd"] += float(cost_usd)
+                entry["tokens"] += bucket.tokens.total_tokens
+                entry["tiers"].add(tier_lower)
+                entry["models"].add(bucket.model)
+                if bucket.inference_geo:
+                    entry["geos"].add(bucket.inference_geo)
+                entry["cache_read_tokens"] += bucket.tokens.cache_read_input_tokens
+                if deprecation:
+                    entry["deprecated_cost_usd"] += float(cost_usd)
+
+            if self.emit_api_key_rollups and bucket.api_key_id:
+                ak_key = (bucket.date, bucket.workspace_id, bucket.api_key_id)
+                entry = api_key_rollup.setdefault(
+                    ak_key,
+                    {
+                        "cost_usd": 0.0,
+                        "tokens": 0,
+                        "tiers": set(),
+                        "models": set(),
+                    },
+                )
+                entry["cost_usd"] += float(cost_usd)
+                entry["tokens"] += bucket.tokens.total_tokens
+                entry["tiers"].add(tier_lower)
+                entry["models"].add(bucket.model)
 
         # Emit leftover cost_report rows as synthetic records (no token detail)
         # so the user's headline cost matches Anthropic's console even when
@@ -640,6 +770,15 @@ class AnthropicConnector(BaseConnector):
                 continue
             if usd <= 0:
                 continue
+            deprecation = _deprecation_notice(description)
+            leftover_meta: dict[str, Any] = {
+                "workspace_id": workspace,
+                "description": description,
+                "cost_source": "cost_report",
+                "isolated_tier": False,
+            }
+            if deprecation:
+                leftover_meta["deprecation_notice"] = deprecation
             unified.append(
                 UnifiedCost(
                     date=date,
@@ -651,10 +790,62 @@ class AnthropicConnector(BaseConnector):
                     usage_quantity=0,
                     usage_unit="tokens",
                     team=workspace or None,
+                    metadata=leftover_meta,
+                )
+            )
+
+        # Per-workspace rollup records — feed into /api/anomalies via
+        # anomaly_detector's per-resource z-score path. Tagged with
+        # metadata.type="rollup" so /api/ai-costs can filter them out.
+        for (date, workspace), entry in workspace_rollup.items():
+            unified.append(
+                UnifiedCost(
+                    date=date,
+                    platform="anthropic",
+                    service="anthropic",
+                    resource=f"workspace:{workspace}",
+                    category=CostCategory.ai_inference,
+                    cost_usd=round(entry["cost_usd"], 6),
+                    usage_quantity=entry["tokens"],
+                    usage_unit="tokens",
+                    team=workspace,
                     metadata={
+                        "type": "rollup",
+                        "rollup_type": "workspace",
                         "workspace_id": workspace,
-                        "description": description,
-                        "cost_source": "cost_report",
+                        "models": sorted(entry["models"]),
+                        "service_tiers": sorted(entry["tiers"]),
+                        "inference_geos": sorted(entry["geos"]),
+                        "cache_read_tokens": entry["cache_read_tokens"],
+                        "deprecated_cost_usd": round(entry["deprecated_cost_usd"], 6),
+                        "has_isolated_tier": bool(
+                            entry["tiers"] & ISOLATED_SERVICE_TIERS
+                        ),
+                    },
+                )
+            )
+
+        # Per-api_key rollup records (opt-in). Same shape as workspace rollups
+        # but keyed by api_key_id.
+        for (date, workspace, api_key), entry in api_key_rollup.items():
+            unified.append(
+                UnifiedCost(
+                    date=date,
+                    platform="anthropic",
+                    service="anthropic",
+                    resource=f"apikey:{api_key}",
+                    category=CostCategory.ai_inference,
+                    cost_usd=round(entry["cost_usd"], 6),
+                    usage_quantity=entry["tokens"],
+                    usage_unit="tokens",
+                    team=workspace or None,
+                    metadata={
+                        "type": "rollup",
+                        "rollup_type": "api_key",
+                        "workspace_id": workspace,
+                        "api_key_id": api_key,
+                        "models": sorted(entry["models"]),
+                        "service_tiers": sorted(entry["tiers"]),
                     },
                 )
             )

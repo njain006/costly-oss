@@ -362,7 +362,7 @@ practitioner material.
 
 ## Costly's Current Connector Status
 
-**File:** `/Users/jain/src/personal/costly/backend/app/services/connectors/anthropic_connector.py`
+**File:** `backend/app/services/connectors/anthropic_connector.py`
 
 The connector is ~137 lines. What it does:
 
@@ -457,3 +457,25 @@ What's broken:
 ## Change Log
 
 - 2026-04-24: Initial knowledge-base created by overnight research run.
+- 2026-04-24 (lane/anthropic): Per-workspace anomaly surfaces + priority-tier
+  isolation shipped. Connector now emits synthetic per-workspace daily
+  rollup UnifiedCost records (`resource="workspace:<id>"`,
+  `metadata.type="rollup"`, `metadata.rollup_type="workspace"`) that the
+  generic `anomaly_detector` per-resource z-score path picks up as its own
+  resource series — so a spike in any one workspace now lights up on
+  `/api/anomalies` without any Anthropic-specific code in that path.
+  Priority tier expanded from flat `priority` (1.25×) to three isolated
+  tiers: `priority` (1.25×), `priority_on_demand` (1.5×), and `flex` (0.5×).
+  Every non-standard tier gets its own UnifiedCost record and is tagged
+  `metadata.isolated_tier=true` for budget tracking. Deprecated Claude 3.x
+  models surface a human-readable `metadata.deprecation_notice` pointing
+  at the 4.x migration target, and per-workspace rollups track
+  `deprecated_cost_usd` so the dashboard can quantify migration debt.
+  `inference_geo` is now first-class — promoted to `UnifiedCost.project`
+  so data-residency dashboards can group on it. Opt-in per-api_key rollups
+  (`emit_api_key_rollups=True`) for orgs that want per-service attribution.
+  `/api/ai-costs` extended (read-only) with `workspace_breakdown`,
+  `tier_breakdown`, and `kpis.deprecated_spend_usd`; `metadata.type=rollup`
+  is excluded from primary aggregates to avoid double-counting.
+  Grade: **A-**. Gap remaining: OpenTelemetry trace ingestion path (tracked
+  on the lane backlog).

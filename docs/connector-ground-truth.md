@@ -338,31 +338,68 @@ Connectors should NEVER silently ignore an override. If a key is present but doe
 
 ## Unified Error Taxonomy
 
-All connector errors raise one of the following (`app/services/connectors/errors.py`):
+**Status: SHIPPED** — see `backend/app/services/connectors/errors.py` (100% test coverage in `backend/tests/test_connector_errors.py`).
 
-| Error class | When to raise |
-|---|---|
-| `ScopeMissingError` | Credentials valid but lack required scope (e.g., regular API key instead of admin). |
-| `WarehouseNotFoundError` | Target warehouse/workspace/project doesn't exist or the role can't see it. |
-| `RateLimitedError` | Vendor returned 429 or equivalent. Carries `retry_after` seconds. |
-| `AuthenticationError` | Credential is invalid/revoked. Distinct from scope. |
-| `VendorDownError` | Vendor returned 5xx after backoff exhausted. |
-| `SchemaDriftError` | Expected field missing in response — vendor changed shape. |
-| `DataLaggedError` | Vendor replied 200 but with a clear "data not ready yet" signal. Not a failure; hint to retry later. |
-| `QuotaExceededError` | Connector exhausted the account's daily query/export quota. |
+All connector errors raise one of the following, every one a subclass of `CostlyConnectorError`:
 
-Each error carries: `platform`, `endpoint`, `vendor_code`, `vendor_message`, `remediation_hint` (human-readable, shown in UI).
+| Error class | `code` | HTTP | When to raise |
+|---|---|---|---|
+| `InvalidCredentialsError` | `invalid_credentials` | 401 | Credential is invalid/revoked. Distinct from scope. |
+| `ScopeMissingError` | `scope_missing` | 403 | Credentials valid but lack required scope (e.g., regular API key instead of admin). Carries `required_scope`. |
+| `WarehouseNotFoundError` | `warehouse_not_found` | 404 | Target warehouse/workspace/project doesn't exist or the role can't see it. Carries `resource_name`. |
+| `APIDisabledError` | `api_disabled` | 409 | Vendor API disabled on account (e.g., AWS Cost Explorer not enabled). |
+| `RateLimitedError` | `rate_limited` | 429 | Vendor returned 429 or equivalent. Carries `retry_after` seconds. |
+| `QuotaExceededError` | `quota_exceeded` | 429 | Daily quota exhausted. Carries `reset_at` (ISO). |
+| `VendorDownError` | `vendor_down` | 502 | Vendor returned 5xx after backoff exhausted. |
+| `SchemaDriftError` | `schema_drift` | 502 | Expected field missing in response — vendor changed shape. Carries `missing_field`. |
+| `DataLaggedError` | `data_lagged` | 503 | Vendor replied 200 but with a clear "data not ready yet" signal. Not a failure; hint to retry later. |
+
+Each error carries: `platform`, `endpoint`, `vendor_code`, `vendor_message`, `remediation_hint`, plus a computed `remediation_url` (→ `https://docs.costly.dev/errors/<code>`).
+
+**Router integration:** `app.services.connectors.errors.register_connector_exception_handler(app)` is wired in `app/main.py`. Any route that raises a `CostlyConnectorError` automatically returns:
+
+```json
+HTTP <http_status>
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "...",
+    "platform": "anthropic",
+    "endpoint": "/v1/organizations/usage_report/messages",
+    "vendor_code": "429",
+    "vendor_message": "...",
+    "remediation_url": "https://docs.costly.dev/errors/rate_limited",
+    "retry_after": 60
+  }
+}
+```
+
+Rate-limited responses also set the `Retry-After` HTTP header.
 
 ## Unified Retry / Backoff Policy
 
-Implemented once in `app/services/connectors/retry.py`, applied via decorator `@with_retry(max_attempts=5)` on all HTTP calls:
+**Status: SHIPPED** — see `backend/app/services/connectors/retry.py` (100% test coverage in `backend/tests/test_connector_retry.py`).
 
-- **Exponential backoff** with jitter: `min(60, 2**attempt + random(0,1))` seconds.
-- **Retry on**: `429`, `500`, `502`, `503`, `504`, connection errors, `DataLaggedError`.
-- **Do not retry on**: `401`, `403`, `404`, `AuthenticationError`, `ScopeMissingError`.
-- **Honor `Retry-After`** header when present (Anthropic, GitHub, Fivetran set it).
-- **Abort after 5 attempts** — convert to `VendorDownError`.
-- Wrap **every** outbound HTTP call; the 15 existing connectors have ad-hoc try/except — refactor to the decorator as we touch each.
+Implemented once and applied via decorator `@with_retry(max_attempts=5)` on all HTTP calls. Works on sync AND async functions.
+
+```python
+from app.services.connectors.retry import (
+    with_retry, raise_for_status_with_taxonomy,
+)
+
+@with_retry(max_attempts=5)
+def fetch_page(self, cursor: str) -> dict:
+    resp = httpx.get(self._url, headers=self._headers, params={"cursor": cursor})
+    raise_for_status_with_taxonomy(resp, platform="anthropic", endpoint="/v1/usage")
+    return resp.json()
+```
+
+- **Exponential backoff** with jitter: `min(60, base * 2**(attempt-1) + random(0, base))` seconds. Base defaults to 1.0s, cap to 60.0s.
+- **Retry on** the transient taxonomy classes: `RateLimitedError`, `DataLaggedError`, `VendorDownError`, plus `httpx.RequestError` (connection-level). HTTP statuses `{429, 500, 502, 503, 504}` map onto these via `raise_for_status_with_taxonomy`.
+- **Do not retry on** `InvalidCredentialsError`, `ScopeMissingError`, `WarehouseNotFoundError`, `APIDisabledError`, `SchemaDriftError`, `QuotaExceededError` — these are permanent. The non-retryable set always wins, even if a caller passes one of these in `retry_on_errors`.
+- **Honor `Retry-After`** header (Anthropic, GitHub, Fivetran set it). `raise_for_status_with_taxonomy` parses the header into `RateLimitedError.retry_after`, and the decorator uses it as the MINIMUM sleep for that attempt (still capped by `backoff_cap`).
+- **Abort after `max_attempts`** — the last transient exception is re-raised wrapped in `VendorDownError`, preserving `platform` / `endpoint` context so the router-level handler still produces a 502 with a meaningful message.
+- Wrap **every** outbound HTTP call; the 15 existing connectors have ad-hoc try/except — refactor to the decorator as we touch each (next lanes' job; the plumbing is now in place).
 
 ## Token-Tier Naming Convention
 

@@ -81,6 +81,22 @@ DEFAULT_ACTIVE_STORAGE_PRICE_PER_TB: float = 23.00
 DEFAULT_FAILSAFE_STORAGE_PRICE_PER_TB: float = 23.00
 DEFAULT_TIMETRAVEL_STORAGE_PRICE_PER_TB: float = 23.00
 
+# Default per-model Cortex credit prices (USD per credit) for the April 2026
+# `AI_SERVICES_USAGE_HISTORY` view breakdown. These values default to the
+# account's compute `credit_price_usd`; callers can override via
+# `pricing_overrides.cortex_model_prices = {"llama3-70b": 1.2, ...}` to
+# reflect capacity / EDP discounts that differ from compute.
+#
+# Source: https://docs.snowflake.com/en/user-guide/snowflake-cortex/aisql-pricing
+# These are *effective per-credit* multipliers for documentation; the actual
+# credit math is done at query time against customer-specified credit prices.
+DEFAULT_CORTEX_MODEL_PRICES: dict[str, float] = {}
+
+# Data freshness probe thresholds (in hours). When the most recent row in the
+# primary source is older than WARN_HOURS we surface a warning to the user.
+FRESHNESS_WARN_HOURS: float = 3.0
+FRESHNESS_STALE_HOURS: float = 24.0
+
 # Service-type -> CostCategory mapping for USAGE_IN_CURRENCY_DAILY and the
 # various serverless views.
 SERVICE_TYPE_CATEGORY: dict[str, CostCategory] = {
@@ -98,6 +114,10 @@ SERVICE_TYPE_CATEGORY: dict[str, CostCategory] = {
     "QUERY_ACCELERATION": CostCategory.compute,
     "AI_SERVICES": CostCategory.ai_inference,
     "CORTEX": CostCategory.ai_inference,
+    "DOCUMENT_AI": CostCategory.ai_inference,
+    "CORTEX_ANALYST": CostCategory.ai_inference,
+    "CORTEX_SEARCH": CostCategory.ai_inference,
+    "UNIVERSAL_SEARCH": CostCategory.ai_inference,
     "STORAGE": CostCategory.storage,
     "DATA_TRANSFER": CostCategory.networking,
     "LOGGING": CostCategory.orchestration,
@@ -124,6 +144,10 @@ SERVICE_TYPE_SLUG: dict[str, str] = {
     "QUERY_ACCELERATION": "snowflake_query_acceleration",
     "AI_SERVICES": "snowflake_cortex",
     "CORTEX": "snowflake_cortex",
+    "DOCUMENT_AI": "snowflake_document_ai",
+    "CORTEX_ANALYST": "snowflake_cortex_analyst",
+    "CORTEX_SEARCH": "snowflake_cortex_search",
+    "UNIVERSAL_SEARCH": "snowflake_universal_search",
     "STORAGE": "snowflake_storage",
     "DATA_TRANSFER": "snowflake_data_transfer",
     "LOGGING": "snowflake_event_tables",
@@ -131,6 +155,27 @@ SERVICE_TYPE_SLUG: dict[str, str] = {
     "HYBRID_TABLE_REQUESTS": "snowflake_hybrid_tables",
     "ICEBERG_TABLE_REQUESTS": "snowflake_iceberg",
     "SNOWPARK_CONTAINER_SERVICES": "snowflake_snowpark_container_services",
+}
+
+# Mapping of AI function family -> canonical service type key used by the
+# AI_SERVICES_USAGE_HISTORY normaliser. The ACCOUNT_USAGE view consolidates
+# all AI products (Cortex Functions, Analyst, Search, Document AI, Universal
+# Search) into one row-per-day table with a `SERVICE_TYPE` column; we map
+# each family to the right cost category and service slug so the UI can
+# distinguish a Cortex function call from a Document AI extraction.
+AI_SERVICE_FAMILY_TO_TYPE: dict[str, str] = {
+    "CORTEX_FUNCTIONS": "CORTEX",
+    "CORTEX_FUNCTION": "CORTEX",
+    "AI_FUNCTIONS": "CORTEX",
+    "CORTEX": "CORTEX",
+    "CORTEX_ANALYST": "CORTEX_ANALYST",
+    "ANALYST": "CORTEX_ANALYST",
+    "CORTEX_SEARCH": "CORTEX_SEARCH",
+    "CORTEX_SEARCH_SERVING": "CORTEX_SEARCH",
+    "DOCUMENT_AI": "DOCUMENT_AI",
+    "DOCUMENT_INTELLIGENCE": "DOCUMENT_AI",
+    "UNIVERSAL_SEARCH": "UNIVERSAL_SEARCH",
+    "AI_SERVICES": "CORTEX",
 }
 
 BYTES_PER_TB: float = 1024.0 ** 4
@@ -159,10 +204,22 @@ class PricingConfig:
     # Cortex and serverless services in credits but some enterprise deals
     # apply a different effective rate.
     service_type_prices: dict[str, float] = field(default_factory=dict)
+    # Per-Cortex-model credit-price overrides, e.g.
+    # {"llama3-70b": 1.2, "claude-3-5-sonnet": 2.5}. Keys are normalized
+    # (lower, whitespace trimmed). Honoured by the AI_SERVICES_USAGE_HISTORY
+    # normaliser; falls back to `credit_price_for_service_type("CORTEX")`
+    # when the model name is unknown.
+    cortex_model_prices: dict[str, float] = field(default_factory=dict)
     # When True, prefer ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY (which
     # already reflects effective billed USD including discounts). Defaults
     # to True so we try it first.
     prefer_org_usage: bool = True
+    # When True, query AI_SERVICES_USAGE_HISTORY (April 2026 GA) on top of
+    # the primary source to get per-model/per-family breakdown. Drill-down
+    # records are tagged `source=ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY`
+    # and `drilldown=True` in metadata so callers can choose whether to
+    # include or exclude them in aggregations. Default True.
+    enable_ai_services_drilldown: bool = True
 
     @classmethod
     def from_credentials(cls, credentials: dict) -> "PricingConfig":
@@ -223,7 +280,23 @@ class PricingConfig:
                 if f > 0:
                     service_type_prices[str(svc).upper()] = f
 
+        cortex_model_prices_raw = overrides.get("cortex_model_prices") or {}
+        cortex_model_prices: dict[str, float] = {}
+        if isinstance(cortex_model_prices_raw, dict):
+            for model, price in cortex_model_prices_raw.items():
+                if model is None:
+                    continue
+                try:
+                    f = float(price)
+                except (TypeError, ValueError):
+                    continue
+                if f > 0:
+                    cortex_model_prices[str(model).strip().lower()] = f
+
         prefer_org_usage = bool(overrides.get("prefer_org_usage", True))
+        enable_ai_services_drilldown = bool(
+            overrides.get("enable_ai_services_drilldown", True)
+        )
 
         return cls(
             credit_price_usd=credit_price,
@@ -232,7 +305,9 @@ class PricingConfig:
             failsafe_storage_price_per_tb=failsafe_price,
             warehouse_size_prices=warehouse_sizes,
             service_type_prices=service_type_prices,
+            cortex_model_prices=cortex_model_prices,
             prefer_org_usage=prefer_org_usage,
+            enable_ai_services_drilldown=enable_ai_services_drilldown,
         )
 
     def credit_price_for_warehouse(self, warehouse_size: Optional[str]) -> float:
@@ -247,6 +322,28 @@ class PricingConfig:
         return self.service_type_prices.get(
             str(service_type).upper(), self.credit_price_usd
         )
+
+    def credit_price_for_cortex_model(
+        self, model_name: Optional[str], service_type: str = "CORTEX"
+    ) -> float:
+        """Resolve the effective credit price for a Cortex / AI Services row.
+
+        Resolution order:
+
+        1. Explicit per-model override (`cortex_model_prices`).
+        2. Per-service-type override (e.g. "CORTEX_ANALYST").
+        3. Account-wide `credit_price_usd`.
+
+        This lets customers price Llama-3 runs differently from Claude
+        runs, and Cortex Analyst messages differently from raw token
+        calls, all while sharing the same warehouse credit price for
+        plain compute.
+        """
+        if model_name:
+            key = str(model_name).strip().lower()
+            if key in self.cortex_model_prices:
+                return self.cortex_model_prices[key]
+        return self.credit_price_for_service_type(service_type)
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +451,45 @@ def _fetchall(cur) -> list[tuple]:
     return list(rows) if rows is not None else []
 
 
+def _hours_since(value: Any) -> Optional[float]:
+    """Return number of hours between `value` and now (UTC), or None if
+    the value cannot be parsed as a datetime.
+
+    Snowflake's cursor returns native `datetime` objects for TIMESTAMP_LTZ
+    columns; the same path also handles date objects (whose effective time
+    is 00:00:00).
+    """
+    if value is None:
+        return None
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        elif hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            # `date` object: treat as start-of-day UTC.
+            dt = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+    return delta.total_seconds() / 3600.0
+
+
+def _normalize_model_name(value: Any) -> Optional[str]:
+    """Strip vendor prefixes / whitespace and lowercase so pricing-table
+    lookups work across the many canonical forms Snowflake ships
+    (`llama3-70b`, `Llama-3-70b`, `snowflake-arctic-instruct`, ...)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    return s.lower()
+
+
 # ---------------------------------------------------------------------------
 # Connector
 # ---------------------------------------------------------------------------
@@ -375,6 +511,10 @@ class SnowflakeConnector(BaseConnector):
         # Each fetch_costs() run collects warnings (permission failures,
         # missing views, etc.) so the UI can surface them to the user.
         self.warnings: list[str] = []
+        # Populated by _probe_freshness() after each fetch_costs() run.
+        # None until the first fetch; a dict of {view, latest, age_hours}
+        # afterwards so the dashboard can render a "last updated" badge.
+        self.freshness: Optional[dict[str, Any]] = None
 
     # ----- connection helpers -------------------------------------------------
     def _connect(self):  # pragma: no cover — thin wrapper
@@ -418,6 +558,7 @@ class SnowflakeConnector(BaseConnector):
         All failures are caught and recorded in `self.warnings`.
         """
         self.warnings = []
+        self.freshness = None
         costs: list[UnifiedCost] = []
 
         try:
@@ -454,6 +595,19 @@ class SnowflakeConnector(BaseConnector):
                 # dimensions that USAGE_IN_CURRENCY_DAILY does not.
                 costs.extend(self._fetch_attribution(cur, days))
                 costs.extend(self._fetch_storage(cur, days))
+
+                # AI_SERVICES_USAGE_HISTORY (April 2026 GA) — per-model and
+                # per-AI-family drill-down. Emitted as drill-down records
+                # (`metadata.drilldown = True`) so aggregators can keep the
+                # billed USD source as the ground truth. Opt-out via
+                # `pricing_overrides.enable_ai_services_drilldown = False`.
+                if self.pricing.enable_ai_services_drilldown:
+                    costs.extend(self._fetch_ai_services(cur, days))
+
+                # Final step: probe ACCOUNT_USAGE freshness so the user
+                # knows whether today's numbers reflect a 30-minute or a
+                # 24-hour view lag. Surface any latency > 3h as a warning.
+                self._probe_freshness(cur)
             finally:
                 try:
                     cur.close()
@@ -1231,6 +1385,215 @@ class SnowflakeConnector(BaseConnector):
             )
         return rows
 
+    # ----- AI_SERVICES_USAGE_HISTORY (April 2026 GA) -------------------------
+    def _fetch_ai_services(self, cur, days: int) -> list[UnifiedCost]:
+        """Per-model / per-family AI spend drill-down.
+
+        `AI_SERVICES_USAGE_HISTORY` was GA'd in April 2026 as the unified
+        backing view for the new AI Budgets feature. It consolidates what
+        previously lived in five separate views (`CORTEX_FUNCTIONS_USAGE_HISTORY`,
+        `CORTEX_ANALYST_USAGE_HISTORY`, `CORTEX_SEARCH_SERVING_USAGE_HISTORY`,
+        `DOCUMENT_AI_USAGE_HISTORY`, `UNIVERSAL_SEARCH_USAGE_HISTORY`) into
+        one row-per-day table keyed by service type + function + model.
+
+        Records emitted here are drill-down records. They duplicate the
+        AI_SERVICES USD already captured by `USAGE_IN_CURRENCY_DAILY`, so
+        every row carries `metadata.drilldown = True` and the aggregator in
+        `unified_costs.py` filters them out of account-level totals. What
+        they give us is the dimensional breakdown (per-model, per-function)
+        that the primary view does not expose.
+
+        Schema (per Snowflake docs, April 2026 GA):
+
+        * START_TIME, END_TIME — TIMESTAMP_LTZ
+        * SERVICE_TYPE — CORTEX_FUNCTIONS | CORTEX_ANALYST |
+          CORTEX_SEARCH | DOCUMENT_AI | UNIVERSAL_SEARCH
+        * FUNCTION_NAME — COMPLETE | EMBED_TEXT_768 | TRANSLATE | ...
+        * MODEL_NAME — llama3-70b | claude-3-5-sonnet | arctic | ...
+          (NULL for non-function services)
+        * WAREHOUSE_NAME, USER_NAME, QUERY_ID
+        * TOKENS — tokens consumed (NULL for per-message services)
+        * TOKEN_CREDITS — credits attributable to tokens
+        * CREDITS — total billable credits on the row
+
+        See: https://docs.snowflake.com/en/sql-reference/account-usage/ai_services_usage_history
+        """
+        sql = f"""
+            SELECT
+                TO_CHAR(START_TIME, 'YYYY-MM-DD') AS D,
+                SERVICE_TYPE,
+                FUNCTION_NAME,
+                MODEL_NAME,
+                SUM(COALESCE(TOKENS, 0)) AS TOKENS,
+                SUM(COALESCE(CREDITS, TOKEN_CREDITS, 0)) AS CREDITS
+            FROM SNOWFLAKE.ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY
+            WHERE START_TIME >= DATEADD(day, -{int(days)}, CURRENT_TIMESTAMP())
+            GROUP BY 1, 2, 3, 4
+            HAVING CREDITS > 0
+            ORDER BY 1
+        """
+        try:
+            cur.execute(sql)
+        except Exception as e:  # noqa: BLE001
+            if _classify_error(e):
+                self.warnings.append(
+                    str(SnowflakePermissionError(
+                        "SNOWFLAKE.ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY",
+                        self.conn_doc.get("role", ""),
+                        e,
+                    ))
+                )
+            else:
+                # The view may not exist on pre-April-2026 accounts; surface
+                # a low-key note rather than shouting.
+                self.warnings.append(
+                    "AI_SERVICES_USAGE_HISTORY unavailable (requires April "
+                    f"2026 release): {e}"
+                )
+            return []
+
+        rows: list[UnifiedCost] = []
+        for row in _fetchall(cur):
+            d, raw_service_type, function_name, model_name, tokens, credits = row
+            c = float(credits or 0)
+            if c <= 0:
+                continue
+            family_key = str(raw_service_type or "").strip().upper().replace(" ", "_")
+            service_type = AI_SERVICE_FAMILY_TO_TYPE.get(family_key, "CORTEX")
+            slug = SERVICE_TYPE_SLUG.get(service_type, "snowflake_cortex")
+            category = SERVICE_TYPE_CATEGORY.get(service_type, CostCategory.ai_inference)
+            model_norm = _normalize_model_name(model_name)
+            credit_price = self.pricing.credit_price_for_cortex_model(
+                model_norm, service_type=service_type
+            )
+            resource = model_norm or function_name or service_type.lower()
+            token_count = float(tokens or 0)
+            rows.append(
+                UnifiedCost(
+                    date=_normalize_date(d),
+                    platform="snowflake",
+                    service=slug,
+                    resource=str(resource),
+                    category=category,
+                    cost_usd=round(c * credit_price, 4),
+                    usage_quantity=round(token_count or c, 4),
+                    usage_unit="tokens" if token_count > 0 else "credits",
+                    metadata={
+                        "source": "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY",
+                        "service_type": service_type,
+                        "ai_family": family_key or service_type,
+                        "function_name": function_name,
+                        "model_name": model_norm,
+                        "tokens": token_count,
+                        "credits": round(c, 6),
+                        "credit_price_usd": credit_price,
+                        # Drill-down flag: aggregators should exclude these
+                        # rows from account-level totals to avoid double-
+                        # counting with the USAGE_IN_CURRENCY_DAILY /
+                        # AI_SERVICES parent row.
+                        "drilldown": True,
+                    },
+                )
+            )
+        return rows
+
+    # ----- Data freshness probe ---------------------------------------------
+    # Views and the ACCOUNT_USAGE latency SLOs that Snowflake documents.
+    # Source: https://docs.snowflake.com/en/sql-reference/account-usage#differences-between-account-usage-and-information-schema
+    _FRESHNESS_VIEWS: tuple[tuple[str, str, str], ...] = (
+        (
+            "SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY",
+            "USAGE_DATE",
+            "date",
+        ),
+        (
+            "SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY",
+            "USAGE_DATE",
+            "date",
+        ),
+        (
+            "SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY",
+            "END_TIME",
+            "timestamp",
+        ),
+    )
+
+    def _probe_freshness(self, cur) -> None:
+        """Record a warning when the primary source is stale.
+
+        Runs a single cheap `MAX(date_col)` query against whichever view the
+        role can read. The first view that returns a row wins — we don't
+        need to check every one. Warnings are written to `self.warnings`
+        with a clear, parseable prefix (`"Snowflake data freshness: ..."`)
+        so the UI can show a "last updated X hours ago" badge.
+
+        Latency is not a failure — Snowflake explicitly documents 30min-3h
+        for ACCOUNT_USAGE and up to 24-48h for brand-new accounts. We only
+        warn when the age exceeds `FRESHNESS_WARN_HOURS`; at
+        `FRESHNESS_STALE_HOURS` we upgrade the message so operators notice.
+        """
+        for view, col, kind in self._FRESHNESS_VIEWS:
+            # Honour the `prefer_org_usage=False` opt-out: callers who
+            # explicitly disable the ORGANIZATION_USAGE path shouldn't see
+            # it touched here either.
+            if (
+                not self.pricing.prefer_org_usage
+                and "ORGANIZATION_USAGE" in view
+            ):
+                continue
+            sql = f"SELECT MAX({col}) FROM {view}"
+            try:
+                cur.execute(sql)
+            except Exception as e:  # noqa: BLE001
+                # Permission failure or view does not exist — move on. We
+                # already log permission errors in the primary fetch paths.
+                logger.debug("freshness probe on %s failed: %s", view, e)
+                continue
+            row = None
+            try:
+                row = cur.fetchone()
+            except Exception:  # pragma: no cover
+                pass
+            if not row:
+                continue
+            latest = row[0] if isinstance(row, (tuple, list)) else row
+            if latest is None:
+                continue
+            hours = _hours_since(latest)
+            if hours is None:
+                continue
+            # Daily views are expected to lag ~24h simply because rows only
+            # exist for completed days; compute the "excess" lag so the
+            # warning reflects _unexpected_ staleness rather than the
+            # structural daily cadence.
+            adjusted = hours - 24.0 if kind == "date" else hours
+            latest_iso = _normalize_date(latest) if kind == "date" else str(latest)
+            metadata = {
+                "view": view,
+                "latest": latest_iso,
+                "age_hours": round(hours, 2),
+                "adjusted_hours": round(max(adjusted, 0.0), 2),
+            }
+            if adjusted >= FRESHNESS_STALE_HOURS:
+                self.warnings.append(
+                    f"Snowflake data freshness: {view} last updated "
+                    f"{round(hours, 1)}h ago (STALE, >24h beyond expected). "
+                    f"Yesterday's spend may be missing. "
+                    f"Metadata: {metadata}"
+                )
+            elif adjusted >= FRESHNESS_WARN_HOURS:
+                self.warnings.append(
+                    f"Snowflake data freshness: {view} last updated "
+                    f"{round(hours, 1)}h ago (lag {round(adjusted, 1)}h "
+                    f"beyond expected). Metadata: {metadata}"
+                )
+            # Store the probe result even in the healthy case so callers
+            # (e.g. the UI badge) can render "updated N minutes ago".
+            self.freshness = metadata
+            return
+        # No view was readable for freshness — not fatal, just quiet.
+        self.freshness = None
+
 
 __all__ = [
     "SnowflakeConnector",
@@ -1238,6 +1601,10 @@ __all__ = [
     "PricingConfig",
     "DEFAULT_CREDIT_PRICE_USD",
     "DEFAULT_ACTIVE_STORAGE_PRICE_PER_TB",
+    "DEFAULT_CORTEX_MODEL_PRICES",
+    "FRESHNESS_WARN_HOURS",
+    "FRESHNESS_STALE_HOURS",
     "SERVICE_TYPE_CATEGORY",
     "SERVICE_TYPE_SLUG",
+    "AI_SERVICE_FAMILY_TO_TYPE",
 ]

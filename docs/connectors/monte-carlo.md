@@ -234,7 +234,7 @@ Competitive positioning for Costly: MC's "Cost Visibility" shows MC cares about 
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/monte_carlo_connector.py`
+File: `backend/app/services/connectors/monte_carlo_connector.py`
 
 - **Class**: `MonteCarloConnector(BaseConnector)` with `platform = "monte_carlo"`
 - **Auth**: `api_key_id` + `api_token` in headers (`x-mcd-id`, `x-mcd-token`)

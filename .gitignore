@@ -51,3 +51,6 @@ backend/server.py
 .coverage
 backend/.coverage
 htmlcov/
+
+# Local compose override (volume mounts, etc.)
+docker-compose.override.yml

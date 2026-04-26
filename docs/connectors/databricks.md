@@ -410,7 +410,7 @@ Notable 2025-2026 changes:
 
 ## Costly's Current Connector Status
 
-Source: `/Users/jain/src/personal/costly/backend/app/services/connectors/databricks_connector.py` (~240 lines, thinnest of the three warehouses).
+Source: `backend/app/services/connectors/databricks_connector.py` (~240 lines, thinnest of the three warehouses).
 
 **Implemented:**
 - `test_connection()` via account-level `/usage/download` + workspace `/clusters/list` fallback.

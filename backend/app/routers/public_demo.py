@@ -17,6 +17,9 @@ limiter = Limiter(key_func=get_remote_address)
 
 from app.services.unified_costs import CONNECTOR_MAP
 from app.services.demo import (
+    generate_demo_ai_costs,
+    generate_demo_anomalies,
+    generate_demo_chat_sample,
     generate_demo_dashboard,
     generate_demo_costs,
     generate_demo_queries_paginated,
@@ -46,6 +49,11 @@ async def demo_dashboard(days: int = Query(30, ge=1, le=365)):
 @router.get("/costs")
 async def demo_costs(days: int = Query(30, ge=1, le=365)):
     return {**generate_demo_costs(days), "fetched_at": _now(), "demo": True}
+
+
+@router.get("/ai-costs")
+async def demo_ai_costs(days: int = Query(30, ge=1, le=365)):
+    return {**generate_demo_ai_costs(days), "fetched_at": _now()}
 
 
 @router.get("/queries")
@@ -119,6 +127,22 @@ async def demo_connections_status():
 @router.get("/alerts")
 async def demo_alerts():
     return []
+
+
+@router.get("/anomalies")
+async def demo_anomalies(days: int = Query(30, ge=1, le=365)):
+    """Mirror of ``/api/anomalies`` for the public demo.
+
+    Returns ``{anomalies, count, unacknowledged}`` with stories tied to the
+    existing dashboard + AI-costs narratives.
+    """
+    return {**generate_demo_anomalies(days), "fetched_at": _now(), "demo": True}
+
+
+@router.get("/chat/sample")
+async def demo_chat_sample():
+    """Seed a saved sample conversation for first-time demo visitors."""
+    return {**generate_demo_chat_sample(), "demo": True}
 
 
 @router.get("/platforms")

@@ -396,7 +396,7 @@ Notable 2025-2026 changes:
 
 ## Costly's Current Connector Status
 
-Source: `/Users/jain/src/personal/costly/backend/app/services/connectors/bigquery_connector.py` (~250 lines; minimal).
+Source: `backend/app/services/connectors/bigquery_connector.py` (~250 lines; minimal).
 
 **Implemented:**
 - `_get_access_token()`: OAuth2 via service account JSON. Falls back from `google.auth` SDK to manual JWT flow.

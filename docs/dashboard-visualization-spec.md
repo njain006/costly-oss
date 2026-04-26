@@ -2,7 +2,7 @@
 
 **Status:** Draft v1.0
 **Scope:** Dashboard pages of `costly.cdatainsights.com` (frontend-next/ app).
-**Stack anchors:** Next.js 15 (App Router) + React 19 + Tailwind v4 + shadcn/ui + Recharts 3 + lucide-react. See `/Users/jain/src/personal/costly/CLAUDE.md`.
+**Stack anchors:** Next.js 15 (App Router) + React 19 + Tailwind v4 + shadcn/ui + Recharts 3 + lucide-react. See `CLAUDE.md`.
 **Audience:** Data engineers, platform engineers, AI-eng leads, and CTOs who want a single pane of glass over their data + AI platform spend, plus a conversational agent on top of it.
 
 This spec is opinionated. Where a choice is made (e.g. stacked area over calendar heatmap for the hero chart), rationale is given. Every page section lists the Recharts/SVG artifacts, shadcn components, mobile breakpoints, dark-mode behavior, and WCAG AA notes.
@@ -23,7 +23,7 @@ These apply to every page.
 
 **No chart without a takeaway.** Every chart has a one-line human-readable summary rendered above it (e.g. "Spend up 14% vs last week, driven by Snowflake `ANALYTICS_WH`"). The agent writes these; they fall back to a deterministic template.
 
-**Design tokens.** Stick to the palette in `/Users/jain/src/personal/costly/frontend-next/src/lib/constants.ts`:
+**Design tokens.** Stick to the palette in `frontend-next/src/lib/constants.ts`:
 
 ```
 primary:      #0C4A6E  (slate-900-ish deep blue)
@@ -70,7 +70,7 @@ Everything else is a click away. This page should be viewable in under 3 seconds
 
 **Why 6 not 4?** Data teams want compute + AI coverage in one glance. 4 would force a choice between "total spend" and "AI cache savings"; the latter is our wedge and must stay visible on cold start.
 
-**Components:** `StatCard` (already exists at `/Users/jain/src/personal/costly/frontend-next/src/components/stat-card.tsx`) extended with:
+**Components:** `StatCard` (already exists at `frontend-next/src/components/stat-card.tsx`) extended with:
 - `delta?: { value: number; direction: "up"|"down"|"flat" }`
 - `sparkline?: number[]` (rendered as a 60x16 inline Recharts `<LineChart>` with no axes)
 - `variant?: "default"|"warning"|"danger"|"success"` drives border-left color
@@ -194,7 +194,7 @@ Three rotating suggested prompts (fade swap every 6s). The same suggestions exis
 
 ## 2. AI Spend page (`/ai-costs`)
 
-This is costly's hero feature. Three providers (Claude, OpenAI, Gemini) unified with shared token taxonomy. The backend connectors already normalize to a `UnifiedCost` record (see `/Users/jain/src/personal/costly/backend/app/services/connectors/anthropic_connector.py`, `openai_connector.py`, `gemini_connector.py`); this page needs an extended shape that preserves tier-level tokens.
+This is costly's hero feature. Three providers (Claude, OpenAI, Gemini) unified with shared token taxonomy. The backend connectors already normalize to a `UnifiedCost` record (see `backend/app/services/connectors/anthropic_connector.py`, `openai_connector.py`, `gemini_connector.py`); this page needs an extended shape that preserves tier-level tokens.
 
 ### 2.1 Page header
 
@@ -266,7 +266,7 @@ Rationale for rejecting alternatives:
 
 **Alluvial flow (toggle).** Custom SVG or a lightweight library (no Recharts support). Recommend `d3-sankey` loaded dynamically. Flow: Provider (3 nodes) → Model (~8 nodes) → Tier (5 nodes). Band width = token count. Use this as a "weekly flow" snapshot, not a time series.
 
-**Components:** Recharts `<AreaChart>` stacked; shadcn `<Tabs>` for the `$` / `tokens` toggle; a lazy-loaded `<SankeyFlow>` for alluvial. Data source extension needed: the existing `AiCostsData.daily_tokens` in `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/ai-costs/page.tsx` only has `input | output | total`. Extend backend response to include `cache_read | cache_write_5m | cache_write_1h`.
+**Components:** Recharts `<AreaChart>` stacked; shadcn `<Tabs>` for the `$` / `tokens` toggle; a lazy-loaded `<SankeyFlow>` for alluvial. Data source extension needed: the existing `AiCostsData.daily_tokens` in `frontend-next/src/app/(dashboard)/ai-costs/page.tsx` only has `input | output | total`. Extend backend response to include `cache_read | cache_write_5m | cache_write_1h`.
 
 ### 2.4 Per-model breakdown — horizontal bar with mini-columns
 
@@ -360,7 +360,7 @@ Why not treemap? Only ~7 tools — treemap over-engineers. Why not pie? Need the
 
 This is the most actionable AI-spend visualization for Claude Code users specifically — it answers "which tools are eating my budget per call?" A high $/call number on `Task` (sub-agents) signals the user should scope-down delegations.
 
-**Data source.** Needs a new backend field on `claude_code_connector.py` (already scaffolded at `/Users/jain/src/personal/costly/backend/app/services/connectors/claude_code_connector.py`). Tool usage is available from the Claude Code transcript JSONL files — parse and aggregate per-tool.
+**Data source.** Needs a new backend field on `claude_code_connector.py` (already scaffolded at `backend/app/services/connectors/claude_code_connector.py`). Tool usage is available from the Claude Code transcript JSONL files — parse and aggregate per-tool.
 
 ### 2.8 Session drill-down (project → conversation → turns)
 
@@ -441,7 +441,7 @@ Vertical timeline, reverse-chronological. Each event has severity glyph (▲/▼
 
 List of connected platforms. Lets the user see health at a glance, click into a per-platform deep dive, and add new connectors.
 
-The page already exists at `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/platforms/page.tsx` with a connector catalog and a list of connected platforms. This spec refines the layout.
+The page already exists at `frontend-next/src/app/(dashboard)/platforms/page.tsx` with a connector catalog and a list of connected platforms. This spec refines the layout.
 
 ### 3.2 Card grid vs table — **card grid wins, table as toggle**
 
@@ -490,7 +490,7 @@ Each card is a shadcn `<Card>` with:
 
 ### 3.4 Per-platform deep dive (`/platforms/[platform]`)
 
-Already scaffolded at `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/platforms/[platform]/`. Spec:
+Already scaffolded at `frontend-next/src/app/(dashboard)/platforms/[platform]/`. Spec:
 
 - Reuses AI-Spend page structure for AI platforms (Claude/OpenAI/Gemini) — they inherit the cache/token/model/tool panels from §2.
 - For warehouse platforms (Snowflake/BigQuery/Databricks): warehouses/users/queries/storage tabs — existing pattern from `warehouses/page.tsx`, `queries/page.tsx`, etc.
@@ -756,7 +756,7 @@ Shadcn `<Checkbox>` grid. Each channel pulls config from Settings → Integratio
 
 ## 7. Conversational agent page (`/chat`)
 
-Existing page at `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/chat/page.tsx`. This spec extends it with transparency, tool-call visibility, inline charts, saved queries, and cost disclosure — patterns stolen from Claude's own UI and from Langfuse's observability view.
+Existing page at `frontend-next/src/app/(dashboard)/chat/page.tsx`. This spec extends it with transparency, tool-call visibility, inline charts, saved queries, and cost disclosure — patterns stolen from Claude's own UI and from Langfuse's observability view.
 
 ### 7.1 Full layout
 
@@ -1082,14 +1082,45 @@ Costly is building toward W26 YC (Sep 2026) with a goal of 10 paying users and $
 - Observable Plot — [observablehq.com/plot](https://observablehq.com/plot/) — chart mark vocabulary.
 - Apache ECharts — [echarts.apache.org](https://echarts.apache.org/) — chart gallery for token-tier / alluvial inspiration.
 - Existing codebase:
-  - `/Users/jain/src/personal/costly/CLAUDE.md`
-  - `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/dashboard/page.tsx`
-  - `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/ai-costs/page.tsx`
-  - `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/overview/page.tsx`
-  - `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/chat/page.tsx`
-  - `/Users/jain/src/personal/costly/frontend-next/src/app/(dashboard)/platforms/page.tsx`
-  - `/Users/jain/src/personal/costly/frontend-next/src/lib/constants.ts`
-  - `/Users/jain/src/personal/costly/backend/app/services/connectors/` (16 connectors)
+  - `CLAUDE.md`
+  - `frontend-next/src/app/(dashboard)/dashboard/page.tsx`
+  - `frontend-next/src/app/(dashboard)/ai-costs/page.tsx`
+  - `frontend-next/src/app/(dashboard)/overview/page.tsx`
+  - `frontend-next/src/app/(dashboard)/chat/page.tsx`
+  - `frontend-next/src/app/(dashboard)/platforms/page.tsx`
+  - `frontend-next/src/lib/constants.ts`
+  - `backend/app/services/connectors/` (16 connectors)
+
+---
+
+## Change log
+
+### 2026-04-24 — Anomalies page shipped (lane/ui)
+
+Shipped §4 end-to-end:
+
+- New route `/anomalies` with the hybrid list-plus-timeline layout described in §4.1.
+- Row-level actions: `Acknowledge` (calls `POST /api/anomalies/:id/acknowledge`), `Mute 7d / 30d / forever`, `Mark expected`, `Investigate`. Mute/expected are currently local-only (localStorage) until a backend endpoint is added — see `frontend-next/src/lib/anomalies.ts`.
+- Detail drawer (§4.2) via shadcn `<Sheet>` — 14-day hourly-ish Recharts bar (anomaly day in red), probable cause, "Ask agent" shortcut that pre-seeds `/chat?q=...`.
+- KPI strip: open / impact-today / acknowledged / muted counts (§1.2 style).
+- Platform and status filters synced to local state (URL persistence deferred to a follow-up).
+- Empty, loading, error states; muted / expected signatures list with "Clear" action.
+- Dark-mode compatible (uses design tokens); ARIA labels on status badges, keyboard-navigable actions.
+- Fallback path: when the backend returns zero anomalies, the page derives spikes from `/api/platforms/costs` `daily_trend` using a z-score rule (threshold 2σ) so a new install still sees something actionable.
+- Pure-function tests in `frontend-next/src/lib/anomalies.test.ts` — covers signature stability, normalization, mute window expiry, z-score derivation, and storage round-trip.
+- Sidebar: new "Anomalies" link between Recommendations and Alerts.
+
+Files touched (frontend-next only):
+- `src/app/(dashboard)/anomalies/page.tsx` (new)
+- `src/components/anomalies/anomaly-row.tsx` (new)
+- `src/components/anomalies/anomaly-detail-sheet.tsx` (new)
+- `src/lib/anomalies.ts` (new, pure logic)
+- `src/lib/anomalies.test.ts` (new, pure tests)
+- `src/components/sidebar.tsx` (nav entry)
+- `docs/dashboard-visualization-spec.md` (this change log)
+- `docs/lanes/ui.md` (new — persistent lane notes)
+
+Backend contract: the page reads `GET /api/anomalies?days=N` and `POST /api/anomalies/:id/acknowledge`. `POST /api/anomalies/detect` is called by the Re-scan button. Mute/mark-expected endpoints are **not** yet wired — they are the obvious next backend task. The page degrades gracefully when the backend is offline or returns an empty list.
 
 ---
 

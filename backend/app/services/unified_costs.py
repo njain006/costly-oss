@@ -23,6 +23,7 @@ from app.services.connectors.tableau_connector import TableauConnector
 from app.services.connectors.github_connector import GitHubConnector
 from app.services.connectors.gitlab_connector import GitLabConnector
 from app.services.connectors.omni_connector import OmniConnector
+from app.services.connectors.redshift_connector import RedshiftConnector
 from app.services.connectors.snowflake_connector import SnowflakeConnector
 from app.services.encryption import decrypt_value
 
@@ -44,6 +45,7 @@ CONNECTOR_MAP: dict[str, type[BaseConnector]] = {
     "github": GitHubConnector,
     "gitlab": GitLabConnector,
     "omni": OmniConnector,
+    "redshift": RedshiftConnector,
 }
 
 

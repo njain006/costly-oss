@@ -43,6 +43,7 @@ CONNECTOR_CLASSES = [
     ("app.services.connectors.github_connector", "GitHubConnector", "github"),
     ("app.services.connectors.gitlab_connector", "GitLabConnector", "gitlab"),
     ("app.services.connectors.omni_connector", "OmniConnector", "omni"),
+    ("app.services.connectors.redshift_connector", "RedshiftConnector", "redshift"),
 ]
 
 
@@ -82,16 +83,17 @@ def test_connector_has_required_methods(module_path, class_name, platform):
     reason="motor not installed (runs in Docker)"
 )
 def test_connector_map_has_all_connectors():
-    """CONNECTOR_MAP must include all 16 connectors (15 external + snowflake).
+    """CONNECTOR_MAP must include all 17 connectors (16 external + snowflake).
 
     SnowflakeConnector was added to CONNECTOR_MAP in commit bceb94f
     ("Sync with upstream: ... Snowflake unification") and is already on main.
-    The expected count here was updated from 15 to reflect that existing addition.
+    RedshiftConnector was split out of the AWS umbrella as a first-class
+    connector in the lane/redshift branch.
     """
     from app.services.unified_costs import CONNECTOR_MAP
     expected = {"snowflake", "aws", "anthropic", "dbt_cloud", "openai", "fivetran", "gemini",
                 "airbyte", "monte_carlo", "gcp", "databricks", "looker",
-                "tableau", "github", "gitlab", "omni"}
+                "tableau", "github", "gitlab", "omni", "redshift"}
     assert set(CONNECTOR_MAP.keys()) == expected
 
 
@@ -422,6 +424,31 @@ class TestOmniConnector:
         from app.services.connectors.omni_connector import OmniConnector
         conn = OmniConnector(omni_credentials)
         assert conn.platform == "omni"
+
+
+# ─── Test: Redshift connector ──────────────────────────────────────
+
+class TestRedshiftConnector:
+
+    def test_instantiation_provisioned(self, redshift_provisioned_credentials):
+        from app.services.connectors.redshift_connector import RedshiftConnector
+        conn = RedshiftConnector(redshift_provisioned_credentials)
+        assert conn.platform == "redshift"
+        assert conn.cluster_identifier == "analytics-prod"
+        assert conn.is_serverless is False
+
+    def test_instantiation_serverless(self, redshift_serverless_credentials):
+        from app.services.connectors.redshift_connector import RedshiftConnector
+        conn = RedshiftConnector(redshift_serverless_credentials)
+        assert conn.platform == "redshift"
+        assert conn.workgroup_name == "analytics-wg"
+        assert conn.is_serverless is True
+
+    def test_node_pricing_table(self):
+        from app.services.connectors.redshift_connector import DEFAULT_NODE_HOUR
+        required = ["ra3.xlplus", "ra3.4xlarge", "ra3.16xlarge", "dc2.large"]
+        for node in required:
+            assert node in DEFAULT_NODE_HOUR, f"Missing price for {node}"
 
 
 # ─── Test: UnifiedCost model ───────────────────────────────────────

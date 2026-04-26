@@ -114,12 +114,21 @@ const PLATFORMS: PlatformDef[] = [
   },
   {
     key: "anthropic",
-    label: "Anthropic",
+    label: "Anthropic API",
     category: "AI",
     fields: [
       { key: "api_key", label: "Admin API Key", type: "password", placeholder: "sk-ant-admin-..." },
     ],
-    setupGuide: "Go to console.anthropic.com \u2192 Settings \u2192 API Keys",
+    setupGuide: "console.anthropic.com \u2192 Settings \u2192 Admin Keys. Not a regular sk-ant key.",
+  },
+  {
+    key: "claude_code",
+    label: "Claude Code",
+    category: "AI",
+    fields: [
+      { key: "projects_dir", label: "Projects directory", type: "text", placeholder: "~/.claude/projects" },
+    ],
+    setupGuide: "Parses local session JSONLs. Self-hosted only. Set to /claude-projects if you mounted ~/.claude/projects in docker-compose.",
   },
   {
     key: "gemini",

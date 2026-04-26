@@ -37,11 +37,14 @@ async def get_ai_costs(
     since = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     prev_since = (now - timedelta(days=days * 2)).strftime("%Y-%m-%d")
 
+    # Exclude synthetic rollup records (emitted by the Anthropic connector for
+    # per-workspace / per-api_key anomaly surfacing) so totals are not
+    # double-counted.
     base_match = {
         "user_id": user_id,
         "platform": {"$in": AI_PLATFORMS},
         "category": "ai_inference",
-        "metadata.type": {"$ne": "inventory"},
+        "metadata.type": {"$nin": ["inventory", "rollup"]},
     }
     current_match = {**base_match, "date": {"$gte": since}}
     prev_match = {**base_match, "date": {"$gte": prev_since, "$lt": since}}
@@ -214,6 +217,15 @@ async def get_ai_costs(
     # --- Recommendations ---
     recommendations = _generate_recommendations(model_breakdown, total_cost, daily_tokens)
 
+    # --- Workspace breakdown (Anthropic) — from rollup records ---
+    workspace_breakdown = await _anthropic_workspace_breakdown(user_id, since)
+
+    # --- Service-tier breakdown (Anthropic priority / batch / flex isolation) ---
+    tier_breakdown = await _anthropic_service_tier_breakdown(user_id, since)
+
+    # --- Deprecation spend — how much is still on deprecated models ---
+    deprecated_spend = await _anthropic_deprecated_spend(user_id, since)
+
     return {
         "kpis": {
             "total_cost": round(total_cost, 2),
@@ -226,14 +238,115 @@ async def get_ai_costs(
             "cache_savings_usd": cache_savings_usd,
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
+            "deprecated_spend_usd": deprecated_spend,
         },
         "providers": provider_list,
         "daily_spend": daily_spend,
         "daily_tokens": daily_tokens,
         "cost_per_1k_trend": cost_per_1k_trend,
         "model_breakdown": model_breakdown,
+        "workspace_breakdown": workspace_breakdown,
+        "tier_breakdown": tier_breakdown,
         "recommendations": recommendations,
     }
+
+
+async def _anthropic_workspace_breakdown(user_id: str, since: str) -> list[dict]:
+    """Aggregate Anthropic workspace rollup records into a per-workspace view."""
+    rows = await db.unified_costs.aggregate([
+        {"$match": {
+            "user_id": user_id,
+            "platform": "anthropic",
+            "date": {"$gte": since},
+            "metadata.type": "rollup",
+            "metadata.rollup_type": "workspace",
+        }},
+        {"$group": {
+            "_id": "$metadata.workspace_id",
+            "cost": {"$sum": "$cost_usd"},
+            "tokens": {"$sum": "$usage_quantity"},
+            "cache_read_tokens": {
+                "$sum": {"$ifNull": ["$metadata.cache_read_tokens", 0]}
+            },
+            "deprecated_cost": {
+                "$sum": {"$ifNull": ["$metadata.deprecated_cost_usd", 0]}
+            },
+            "has_isolated_tier": {"$max": "$metadata.has_isolated_tier"},
+            "models": {"$addToSet": "$metadata.models"},
+            "service_tiers": {"$addToSet": "$metadata.service_tiers"},
+            "inference_geos": {"$addToSet": "$metadata.inference_geos"},
+        }},
+        {"$sort": {"cost": -1}},
+    ]).to_list(100)
+
+    def _flatten(nested):
+        flat = set()
+        for entry in nested or []:
+            if isinstance(entry, list):
+                flat.update(entry)
+            elif entry:
+                flat.add(entry)
+        return sorted(flat)
+
+    return [
+        {
+            "workspace_id": r["_id"],
+            "cost": round(r["cost"], 2),
+            "tokens": r["tokens"],
+            "cache_read_tokens": r["cache_read_tokens"],
+            "deprecated_cost": round(r["deprecated_cost"], 2),
+            "has_isolated_tier": bool(r.get("has_isolated_tier")),
+            "models": _flatten(r["models"]),
+            "service_tiers": _flatten(r["service_tiers"]),
+            "inference_geos": _flatten(r["inference_geos"]),
+        }
+        for r in rows
+    ]
+
+
+async def _anthropic_service_tier_breakdown(user_id: str, since: str) -> list[dict]:
+    """Aggregate Anthropic primary records by service_tier for budget tracking."""
+    rows = await db.unified_costs.aggregate([
+        {"$match": {
+            "user_id": user_id,
+            "platform": "anthropic",
+            "date": {"$gte": since},
+            "metadata.type": {"$ne": "rollup"},
+            "metadata.service_tier": {"$exists": True},
+        }},
+        {"$group": {
+            "_id": "$metadata.service_tier",
+            "cost": {"$sum": "$cost_usd"},
+            "tokens": {"$sum": "$usage_quantity"},
+            "workspaces": {"$addToSet": "$metadata.workspace_id"},
+        }},
+        {"$sort": {"cost": -1}},
+    ]).to_list(20)
+
+    return [
+        {
+            "service_tier": r["_id"],
+            "cost": round(r["cost"], 2),
+            "tokens": r["tokens"],
+            "workspace_count": len([w for w in r["workspaces"] if w]),
+        }
+        for r in rows
+    ]
+
+
+async def _anthropic_deprecated_spend(user_id: str, since: str) -> float:
+    """Total $ still being spent on deprecated Claude models."""
+    rows = await db.unified_costs.aggregate([
+        {"$match": {
+            "user_id": user_id,
+            "platform": "anthropic",
+            "date": {"$gte": since},
+            "metadata.type": {"$ne": "rollup"},
+            "metadata.deprecation_notice": {"$exists": True, "$ne": None},
+        }},
+        {"$group": {"_id": None, "cost": {"$sum": "$cost_usd"}}},
+    ]).to_list(1)
+    return round(rows[0]["cost"], 2) if rows else 0.0
 
 
 def _generate_recommendations(models: list[dict], total_cost: float, daily_tokens: list[dict]) -> list[dict]:

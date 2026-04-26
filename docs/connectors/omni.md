@@ -182,7 +182,7 @@ No published books on Omni yet (too new).
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/omni_connector.py`
+File: `backend/app/services/connectors/omni_connector.py`
 
 **What it does today:**
 

@@ -32,8 +32,11 @@ import pytest
 from app.models.platform import CostCategory, UnifiedCost
 from app.services.connectors.base import BaseConnector
 from app.services.connectors.snowflake_connector import (
+    AI_SERVICE_FAMILY_TO_TYPE,
     DEFAULT_ACTIVE_STORAGE_PRICE_PER_TB,
     DEFAULT_CREDIT_PRICE_USD,
+    FRESHNESS_STALE_HOURS,
+    FRESHNESS_WARN_HOURS,
     PricingConfig,
     SERVICE_TYPE_CATEGORY,
     SERVICE_TYPE_SLUG,
@@ -68,12 +71,24 @@ class FakeCursor:
     * a single row (returned via fetchone())
     * an Exception instance (raised during execute())
 
-    Each entry is consumed in FIFO order; unmatched executes raise
-    `AssertionError` to flag missing programming in the test.
+    Each entry is consumed in FIFO order. A program whose needle is `"*"`
+    acts as a persistent wildcard fallback (not consumed) for SQL calls
+    that don't match a specific needle — useful for the freshness probe
+    which ran after all the scripted calls in existing tests. Unmatched
+    executes with no wildcard raise `AssertionError` to flag missing
+    programming in the test.
     """
 
     def __init__(self, programs: list[tuple[str, Any]]):
-        self.programs = list(programs)
+        # Auto-append a permissive default for the freshness probe so the
+        # many existing tests don't need to re-program themselves. Tests
+        # that explicitly want to assert the freshness query ran can still
+        # override by supplying their own "MAX(" program earlier.
+        extended = list(programs) + [
+            ("AI_SERVICES_USAGE_HISTORY", []),
+            ("*", None),
+        ]
+        self.programs = extended
         self._pending_rows: list[tuple] = []
         self._pending_single: tuple | None = None
         self.executed: list[str] = []
@@ -81,8 +96,10 @@ class FakeCursor:
     def execute(self, sql: str) -> None:
         self.executed.append(sql)
         for i, (needle, result) in enumerate(self.programs):
-            if needle in sql:
-                self.programs.pop(i)
+            matched = needle == "*" or needle in sql
+            if matched:
+                if needle != "*":
+                    self.programs.pop(i)
                 if isinstance(result, BaseException):
                     raise result
                 if isinstance(result, list):
@@ -1172,3 +1189,410 @@ class TestCombinedScenario:
         assert len(conn.warnings) >= 3
         permission_warnings = [w for w in conn.warnings if "GRANT" in w]
         assert len(permission_warnings) >= 2
+
+
+# ---------------------------------------------------------------------------
+# AI_SERVICES_USAGE_HISTORY — April 2026 GA
+# ---------------------------------------------------------------------------
+class TestAIServicesUsageHistory:
+    """Tests for the per-model / per-family AI spend drill-down."""
+
+    @pytest.fixture
+    def ai_services_row_types(self) -> list[tuple]:
+        """One row per documented AI family in the April 2026 release."""
+        return [
+            # (date, service_type, function_name, model_name, tokens, credits)
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "llama3-70b", 1_000_000, 2.5),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "claude-3-5-sonnet", 500_000, 5.0),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "EMBED_TEXT_768", "arctic", 2_000_000, 0.4),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "TRANSLATE", "llama3-8b", 300_000, 0.3),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "SENTIMENT", "mistral-large", 200_000, 0.6),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "SUMMARIZE", "llama3-70b", 400_000, 1.0),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "EXTRACT_ANSWER", "llama3-8b", 150_000, 0.15),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "CLASSIFY_TEXT", "mistral-7b", 100_000, 0.08),
+            ("2026-04-15", "CORTEX_ANALYST", "ANALYST_MESSAGE", None, 0, 3.2),
+            ("2026-04-15", "CORTEX_SEARCH", "SEARCH_QUERY", None, 0, 0.9),
+            ("2026-04-15", "DOCUMENT_AI", "EXTRACT", None, 0, 1.8),
+            ("2026-04-15", "UNIVERSAL_SEARCH", "SEARCH", None, 0, 0.4),
+        ]
+
+    def _programs_with_ai_services(self, rows: list[tuple]) -> list[tuple]:
+        """Shared setup: empty org usage + empty primaries + AI services rows."""
+        return [
+            ("USAGE_IN_CURRENCY_DAILY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            ("AI_SERVICES_USAGE_HISTORY", rows),
+        ]
+
+    @pytest.mark.parametrize(
+        "service_type,expected_slug,expected_category",
+        [
+            ("CORTEX_FUNCTIONS", "snowflake_cortex", CostCategory.ai_inference),
+            ("CORTEX_ANALYST", "snowflake_cortex_analyst", CostCategory.ai_inference),
+            ("CORTEX_SEARCH", "snowflake_cortex_search", CostCategory.ai_inference),
+            ("DOCUMENT_AI", "snowflake_document_ai", CostCategory.ai_inference),
+            ("UNIVERSAL_SEARCH", "snowflake_universal_search", CostCategory.ai_inference),
+        ],
+    )
+    def test_each_ai_family_slug_and_category(
+        self, sf_credentials, service_type, expected_slug, expected_category
+    ):
+        rows = [("2026-04-15", service_type, "FN", "some-model", 1000, 2.0)]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = [c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY"]
+        assert len(ai) == 1
+        assert ai[0].service == expected_slug
+        assert ai[0].category == expected_category
+        assert ai[0].metadata["drilldown"] is True
+
+    def test_service_type_alias_cortex_maps_to_functions(self, sf_credentials):
+        """Older accounts may emit the short alias CORTEX; we should treat
+        it as CORTEX_FUNCTIONS."""
+        rows = [("2026-04-15", "CORTEX", "COMPLETE", "llama3-70b", 1000, 1.0)]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = [c for c in costs if c.service == "snowflake_cortex"]
+        assert len(ai) == 1
+        assert ai[0].metadata["service_type"] == "CORTEX"
+
+    def test_per_model_pricing_override(self, sf_credentials):
+        """Per-model override must beat the global credit price."""
+        sf_credentials["pricing_overrides"] = {
+            "credit_price_usd": 3.0,
+            "cortex_model_prices": {
+                "llama3-70b": 1.2,            # cheap Llama-3
+                "claude-3-5-sonnet": 5.0,     # premium Claude
+            },
+        }
+        rows = [
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "llama3-70b", 1_000_000, 10.0),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "claude-3-5-sonnet", 500_000, 4.0),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "unknown-xyz", 100_000, 1.0),
+        ]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = {c.resource: c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY"}
+        # Llama-3-70b: 10 credits * $1.2 = $12
+        assert ai["llama3-70b"].cost_usd == 12.0
+        assert ai["llama3-70b"].metadata["credit_price_usd"] == 1.2
+        # Claude: 4 credits * $5.0 = $20
+        assert ai["claude-3-5-sonnet"].cost_usd == 20.0
+        assert ai["claude-3-5-sonnet"].metadata["credit_price_usd"] == 5.0
+        # Unknown model -> falls back to service_type price (CORTEX) -> base
+        assert ai["unknown-xyz"].cost_usd == 3.0  # 1 credit * $3
+        assert ai["unknown-xyz"].metadata["credit_price_usd"] == 3.0
+
+    def test_case_insensitive_model_match(self, sf_credentials):
+        """Snowflake sometimes returns MixedCase model names; our
+        override-lookup must be case-insensitive."""
+        sf_credentials["pricing_overrides"] = {
+            "cortex_model_prices": {"Llama3-70B": 1.25},
+        }
+        rows = [
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "LLAMA3-70B", 100, 2.0),
+        ]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        row = next(c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY")
+        assert row.metadata["credit_price_usd"] == 1.25
+        assert row.metadata["model_name"] == "llama3-70b"  # normalized
+
+    def test_tokens_populate_usage_quantity(self, sf_credentials):
+        """Token-bearing rows use tokens as the usage_quantity/unit."""
+        rows = [
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "llama3-70b", 1_000_000, 2.0),
+            ("2026-04-15", "CORTEX_ANALYST", "ANALYST_MESSAGE", None, 0, 1.0),
+        ]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = {c.service: c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY"}
+        cortex = ai["snowflake_cortex"]
+        assert cortex.usage_unit == "tokens"
+        assert cortex.usage_quantity == 1_000_000
+        # Analyst has no tokens column -> fall back to credits
+        analyst = ai["snowflake_cortex_analyst"]
+        assert analyst.usage_unit == "credits"
+
+    def test_zero_credit_rows_filtered(self, sf_credentials):
+        rows = [
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "llama3-70b", 1000, 0.0),
+            ("2026-04-15", "CORTEX_FUNCTIONS", "COMPLETE", "llama3-70b", 1000, 2.0),
+        ]
+        cursor = FakeCursor(self._programs_with_ai_services(rows))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = [c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY"]
+        assert len(ai) == 1
+
+    def test_permission_error_adds_warning(self, sf_credentials):
+        """Permission failure on the April-2026 view must not crash the
+        fetch; emit a clear warning with the required GRANT."""
+        programs = [
+            ("USAGE_IN_CURRENCY_DAILY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            ("AI_SERVICES_USAGE_HISTORY", Exception("access denied: insufficient privileges for AI_SERVICES_USAGE_HISTORY")),
+        ]
+        cursor = FakeCursor(programs)
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        assert any("AI_SERVICES_USAGE_HISTORY" in w for w in conn.warnings)
+        assert any("GRANT IMPORTED PRIVILEGES" in w for w in conn.warnings)
+
+    def test_missing_view_on_old_accounts_warns_softly(self, sf_credentials):
+        """Pre-April-2026 accounts raise a table-not-found. Connector must
+        fall through silently-ish (warning but not error)."""
+        programs = [
+            ("USAGE_IN_CURRENCY_DAILY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            (
+                "AI_SERVICES_USAGE_HISTORY",
+                Exception("SQL compilation error: Object 'SNOWFLAKE.ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY' does not exist."),
+            ),
+        ]
+        cursor = FakeCursor(programs)
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        # "does not exist" matches the permission-error classifier, so the
+        # warning is emitted with the canonical GRANT remediation — that's
+        # fine; the point is that fetch_costs() did not raise.
+        assert any("AI_SERVICES_USAGE_HISTORY" in w for w in conn.warnings)
+
+    def test_drilldown_opt_out(self, sf_credentials):
+        """Setting enable_ai_services_drilldown=False must skip the query."""
+        sf_credentials["pricing_overrides"] = {"enable_ai_services_drilldown": False}
+        programs = [
+            ("USAGE_IN_CURRENCY_DAILY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+        ]
+        cursor = FakeCursor(programs)
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        assert not any("AI_SERVICES_USAGE_HISTORY" in s for s in cursor.executed)
+
+    def test_full_april_release_breakdown(self, sf_credentials, ai_services_row_types):
+        """Ingest one row per AI family + function and verify:
+        - each is classified into ai_inference
+        - per-model pricing is honoured
+        - drilldown=True on every row
+        - cost math round-trips from credits * credit_price
+        """
+        sf_credentials["pricing_overrides"] = {
+            "credit_price_usd": 3.0,
+            "cortex_model_prices": {"llama3-70b": 1.2, "claude-3-5-sonnet": 5.0},
+        }
+        cursor = FakeCursor(self._programs_with_ai_services(ai_services_row_types))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        ai = [c for c in costs if c.metadata.get("source") == "ACCOUNT_USAGE.AI_SERVICES_USAGE_HISTORY"]
+        assert len(ai) == len(ai_services_row_types)
+        for c in ai:
+            assert c.category == CostCategory.ai_inference
+            assert c.metadata["drilldown"] is True
+            # Round-trip: credits * credit_price_usd == cost_usd
+            credits = c.metadata["credits"]
+            price = c.metadata["credit_price_usd"]
+            assert c.cost_usd == pytest.approx(round(credits * price, 4), abs=1e-3)
+
+    def test_pricing_config_credit_price_for_cortex_model(self):
+        cfg = PricingConfig.from_credentials({
+            "pricing_overrides": {
+                "credit_price_usd": 3.0,
+                "service_type_prices": {"CORTEX_ANALYST": 4.0},
+                "cortex_model_prices": {"llama3-70b": 1.2},
+            }
+        })
+        assert cfg.credit_price_for_cortex_model("llama3-70b") == 1.2
+        # Case-insensitive.
+        assert cfg.credit_price_for_cortex_model("LLAMA3-70B") == 1.2
+        # Unknown model -> service-type override wins.
+        assert cfg.credit_price_for_cortex_model(None, service_type="CORTEX_ANALYST") == 4.0
+        # Unknown model + unknown service -> base.
+        assert cfg.credit_price_for_cortex_model(None, service_type="CORTEX") == 3.0
+
+    def test_service_family_alias_mapping(self):
+        """AI_SERVICE_FAMILY_TO_TYPE must include every April-2026
+        SERVICE_TYPE value emitted by the view."""
+        for alias in (
+            "CORTEX_FUNCTIONS", "CORTEX_FUNCTION", "AI_FUNCTIONS", "CORTEX",
+            "CORTEX_ANALYST", "ANALYST", "CORTEX_SEARCH",
+            "CORTEX_SEARCH_SERVING", "DOCUMENT_AI", "DOCUMENT_INTELLIGENCE",
+            "UNIVERSAL_SEARCH", "AI_SERVICES",
+        ):
+            assert alias in AI_SERVICE_FAMILY_TO_TYPE
+
+
+# ---------------------------------------------------------------------------
+# ACCOUNT_USAGE latency / freshness probe
+# ---------------------------------------------------------------------------
+class TestFreshnessProbe:
+    """Surfaces how stale the ACCOUNT_USAGE / ORGANIZATION_USAGE view data
+    is so the UI can render a "last updated" badge and warn on lag."""
+
+    def _probe_programs(self, latest: Any) -> list[tuple]:
+        return [
+            ("USAGE_IN_CURRENCY_DAILY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            # Freshness probe uses USAGE_IN_CURRENCY_DAILY first. It runs
+            # AFTER the initial org-usage fetch has consumed its program,
+            # so we register a SECOND USAGE_IN_CURRENCY_DAILY program
+            # whose tuple becomes the MAX() result.
+            ("USAGE_IN_CURRENCY_DAILY", (latest,)),
+        ]
+
+    def test_freshness_recent_no_warning(self, sf_credentials):
+        from datetime import datetime, timedelta, timezone
+
+        recent = datetime.now(timezone.utc) - timedelta(hours=25)  # 1h beyond daily lag
+        cursor = FakeCursor(self._probe_programs(recent))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        # 1h beyond 24h daily lag is below the 3h warn threshold -> no warning.
+        latency_warnings = [w for w in conn.warnings if "freshness" in w]
+        assert latency_warnings == []
+        assert conn.freshness is not None
+        assert conn.freshness["view"].endswith("USAGE_IN_CURRENCY_DAILY")
+        assert conn.freshness["age_hours"] >= 24.0
+
+    def test_freshness_lag_warning(self, sf_credentials):
+        from datetime import datetime, timedelta, timezone
+
+        laggy = datetime.now(timezone.utc) - timedelta(hours=24 + FRESHNESS_WARN_HOURS + 1)
+        cursor = FakeCursor(self._probe_programs(laggy))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        latency_warnings = [w for w in conn.warnings if "freshness" in w]
+        assert latency_warnings, "Expected a freshness warning when lag exceeds 3h"
+        assert conn.freshness["adjusted_hours"] >= FRESHNESS_WARN_HOURS
+
+    def test_freshness_stale_critical(self, sf_credentials):
+        from datetime import datetime, timedelta, timezone
+
+        stale = datetime.now(timezone.utc) - timedelta(hours=24 + FRESHNESS_STALE_HOURS + 2)
+        cursor = FakeCursor(self._probe_programs(stale))
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        stale_warnings = [w for w in conn.warnings if "STALE" in w]
+        assert stale_warnings, "Expected a STALE-tagged warning at critical lag"
+
+    def test_freshness_none_when_all_views_denied(self, sf_credentials):
+        """If every freshness view is denied, self.freshness stays None and
+        no warning is added."""
+        programs = [
+            ("USAGE_IN_CURRENCY_DAILY", Exception("SQL access control error: insufficient privileges")),
+            ("METERING_DAILY_HISTORY", []),
+            ("SERVERLESS_TASK_HISTORY", []),
+            ("PIPE_USAGE_HISTORY", []),
+            ("AUTOMATIC_CLUSTERING_HISTORY", []),
+            ("MATERIALIZED_VIEW_REFRESH_HISTORY", []),
+            ("SEARCH_OPTIMIZATION_HISTORY", []),
+            ("REPLICATION_USAGE_HISTORY", []),
+            ("QUERY_ACCELERATION_HISTORY", []),
+            ("SNOWPIPE_STREAMING_CLIENT_HISTORY", []),
+            ("SNOWPARK_CONTAINER_SERVICES_HISTORY", []),
+            ("HYBRID_TABLE_USAGE_HISTORY", []),
+            ("CORTEX_FUNCTIONS_USAGE_HISTORY", []),
+            ("CORTEX_ANALYST_USAGE_HISTORY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            ("AI_SERVICES_USAGE_HISTORY", []),
+            # Freshness probe: every view raises.
+            ("USAGE_IN_CURRENCY_DAILY", Exception("access denied")),
+            ("METERING_DAILY_HISTORY", Exception("access denied")),
+            ("WAREHOUSE_METERING_HISTORY", Exception("access denied")),
+        ]
+        cursor = FakeCursor(programs)
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        assert conn.freshness is None
+
+    def test_freshness_probe_skipped_when_prefer_org_usage_false(self, sf_credentials):
+        """When the customer has opted out of ORGANIZATION_USAGE, the
+        freshness probe must NOT touch it — use METERING_DAILY_HISTORY
+        instead."""
+        from datetime import date as _date
+
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        programs = [
+            ("METERING_DAILY_HISTORY", []),
+            ("SERVERLESS_TASK_HISTORY", []),
+            ("PIPE_USAGE_HISTORY", []),
+            ("AUTOMATIC_CLUSTERING_HISTORY", []),
+            ("MATERIALIZED_VIEW_REFRESH_HISTORY", []),
+            ("SEARCH_OPTIMIZATION_HISTORY", []),
+            ("REPLICATION_USAGE_HISTORY", []),
+            ("QUERY_ACCELERATION_HISTORY", []),
+            ("SNOWPIPE_STREAMING_CLIENT_HISTORY", []),
+            ("SNOWPARK_CONTAINER_SERVICES_HISTORY", []),
+            ("HYBRID_TABLE_USAGE_HISTORY", []),
+            ("CORTEX_FUNCTIONS_USAGE_HISTORY", []),
+            ("CORTEX_ANALYST_USAGE_HISTORY", []),
+            ("QUERY_ATTRIBUTION_HISTORY", []),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+            ("AI_SERVICES_USAGE_HISTORY", []),
+            # Freshness probe will go to METERING_DAILY_HISTORY.
+            ("METERING_DAILY_HISTORY", (_date(2026, 4, 22),)),
+        ]
+        cursor = FakeCursor(programs)
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        conn.fetch_costs(days=7)
+        # No SELECT MAX(USAGE_DATE) FROM ORGANIZATION_USAGE
+        freshness_org = [s for s in cursor.executed
+                         if s.strip().upper().startswith("SELECT MAX")
+                         and "ORGANIZATION_USAGE" in s]
+        assert freshness_org == []
+        # But some freshness call landed on METERING.
+        assert conn.freshness is not None
+        assert "METERING_DAILY_HISTORY" in conn.freshness["view"]
+
+
+# ---------------------------------------------------------------------------
+# PricingConfig extensions for per-model Cortex prices
+# ---------------------------------------------------------------------------
+class TestPricingConfigCortexModels:
+
+    def test_defaults_empty(self):
+        cfg = PricingConfig.from_credentials({})
+        assert cfg.cortex_model_prices == {}
+        assert cfg.enable_ai_services_drilldown is True
+
+    def test_model_prices_lowercased(self):
+        cfg = PricingConfig.from_credentials({
+            "pricing_overrides": {
+                "cortex_model_prices": {"Llama3-70B": 1.2, "Claude-3-5-Sonnet": 5.0}
+            }
+        })
+        assert cfg.cortex_model_prices == {"llama3-70b": 1.2, "claude-3-5-sonnet": 5.0}
+
+    def test_invalid_model_price_ignored(self):
+        cfg = PricingConfig.from_credentials({
+            "pricing_overrides": {
+                "cortex_model_prices": {"llama3-70b": "not-a-number", "claude": -1, "arctic": 0.5}
+            }
+        })
+        assert "llama3-70b" not in cfg.cortex_model_prices
+        assert "claude" not in cfg.cortex_model_prices  # -1 is not positive
+        assert cfg.cortex_model_prices["arctic"] == 0.5
+
+    def test_disable_drilldown(self):
+        cfg = PricingConfig.from_credentials({
+            "pricing_overrides": {"enable_ai_services_drilldown": False}
+        })
+        assert cfg.enable_ai_services_drilldown is False

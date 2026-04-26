@@ -179,7 +179,7 @@ High-signal pages to re-crawl quarterly:
 
 ## Costly's Current Connector Status
 
-File: `/Users/jain/src/personal/costly/backend/app/services/connectors/looker_connector.py`
+File: `backend/app/services/connectors/looker_connector.py`
 
 **What it does today:**
 

@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Lightbulb,
   Activity,
+  Users,
 } from "lucide-react";
 import {
   BarChart,
@@ -53,6 +54,13 @@ interface UnifiedCosts {
   by_service: { service: string; platform: string; cost: number; trend: number }[];
   daily_trend: { date: string; cost: number; aws: number; snowflake: number; openai: number; other: number }[];
   top_resources: { platform: string; resource: string; cost: number; usage: number; trend: number }[];
+  by_account?: {
+    platform: string;
+    connection_id: string | null;
+    account_name: string;
+    account_id: string;
+    cost: number;
+  }[];
   demo?: boolean;
 }
 
@@ -189,6 +197,13 @@ function scaleDemoData(days: number) {
       { service: "RDS Postgres", platform: "aws", cost: Math.round(690 * scale), trend: 0.8 },
       { service: "GitHub Actions", platform: "github", cost: Math.round(457 * scale), trend: 7.3 },
     ],
+    by_account: [
+      { platform: "aws", connection_id: "demo-aws-prod", account_name: "AWS Production", account_id: "111122223333", cost: Math.round(2800 * scale) },
+      { platform: "aws", connection_id: "demo-aws-data", account_name: "AWS Data Platform", account_id: "444455556666", cost: Math.round(980 * scale) },
+      { platform: "aws", connection_id: "demo-aws-sandbox", account_name: "AWS Sandbox", account_id: "777788889999", cost: Math.round(420 * scale) },
+      { platform: "snowflake", connection_id: "demo-sf-prod", account_name: "Snowflake Prod", account_id: "xy12345", cost: Math.round(3100 * scale) },
+      { platform: "openai", connection_id: "demo-openai", account_name: "OpenAI Main", account_id: "org-main", cost: Math.round(2400 * scale) },
+    ],
     top_resources: [
       { platform: "aws", resource: "prod-analytics-cluster (EC2)", cost: Math.round(1420 * scale), usage: 487200, trend: 3.2 },
       { platform: "snowflake", resource: "TRANSFORM_WH (X-Large)", cost: Math.round(1190 * scale), usage: 210, trend: -4.1 },
@@ -246,6 +261,9 @@ export default function OverviewPage() {
   const { data: anomalies } = useApi<AnomalyData[]>(liveData && !liveData.demo ? `/anomalies?days=${days}` : null, [days, liveData]);
   const { data: quickWins } = useApi<QuickWin[]>(liveData && !liveData.demo ? '/recommendations' : null, [liveData]);
   const { data: platforms } = useApi<PlatformHealth[]>(liveData && !liveData.demo ? '/platforms' : null, [liveData]);
+  const { data: aiCosts } = useApi<{
+    kpis: { cache_hit_rate: number; cache_savings_usd: number; cache_read_tokens: number; cache_write_tokens: number };
+  }>(liveData && !liveData.demo ? `/ai-costs?days=${days}` : null, [days, liveData]);
 
   // Show empty state only when no platforms are connected (demo flag from backend)
   const hasData = liveData && !liveData.demo;
@@ -358,8 +376,8 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* KPI Cards — 6 tiles (adds Cache Hit Rate, our wedge vs Vantage/CloudZero) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard
           title="Total Spend"
           value={formatCurrency(data.total_cost)}
@@ -373,16 +391,22 @@ export default function OverviewPage() {
           description={`${data.by_platform.length} platforms`}
         />
         <StatCard
-          title="Top Category"
-          value="AI Inference"
-          icon={Zap}
-          description={formatCurrency(aiCost)}
-        />
-        <StatCard
           title="AI Spend"
           value={formatCurrency(aiCost)}
           icon={Bot}
           description={`${aiPct.toFixed(1)}% of total`}
+        />
+        <StatCard
+          title="Cache Hit Rate"
+          value={aiCosts?.kpis ? `${aiCosts.kpis.cache_hit_rate.toFixed(1)}%` : "—"}
+          icon={Activity}
+          description={aiCosts?.kpis ? `~${formatCurrency(aiCosts.kpis.cache_savings_usd)} saved` : "No AI data yet"}
+        />
+        <StatCard
+          title="Top Category"
+          value="AI Inference"
+          icon={Zap}
+          description={formatCurrency(aiCost)}
         />
         <StatCard
           title="Period Trend"
@@ -556,6 +580,67 @@ export default function OverviewPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Row 2.5: By Account — multi-account breakdown (AWS orgs, Snowflake accounts, AI orgs) */}
+      {data.by_account && data.by_account.length > 1 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <Users className="h-4 w-4 text-sky-500" />
+                By Account
+              </CardTitle>
+              <span className="text-xs text-slate-400">
+                {data.by_account.length} account{data.by_account.length === 1 ? "" : "s"} across{" "}
+                {new Set(data.by_account.map((a) => a.platform)).size} platform
+                {new Set(data.by_account.map((a) => a.platform)).size === 1 ? "" : "s"}
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-0">
+              {/* Header row */}
+              <div className="grid grid-cols-12 pb-2 border-b border-slate-100 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                <span className="col-span-5">Account</span>
+                <span className="col-span-2">Platform</span>
+                <span className="col-span-3">Account ID</span>
+                <span className="col-span-2 text-right">Cost</span>
+              </div>
+              {data.by_account.map((a, i) => {
+                const Icon = PLATFORM_ICONS[a.platform] || Database;
+                const pct = data.total_cost > 0 ? (a.cost / data.total_cost) * 100 : 0;
+                return (
+                  <div
+                    key={`${a.platform}-${a.connection_id ?? a.account_id}-${i}`}
+                    className="grid grid-cols-12 items-center py-2.5 border-b border-slate-50 last:border-0 text-sm"
+                  >
+                    <div className="col-span-5 flex items-center gap-2.5 min-w-0 pr-2">
+                      <div className="h-7 w-7 rounded-md bg-slate-100 flex items-center justify-center shrink-0">
+                        <Icon className="h-4 w-4 text-slate-500" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-900 truncate">
+                          {a.account_name || "Unknown"}
+                        </div>
+                        <div className="text-xs text-slate-400">{pct.toFixed(1)}% of total</div>
+                      </div>
+                    </div>
+                    <span className="col-span-2 text-xs text-slate-500 truncate">
+                      {PLATFORM_LABELS[a.platform] || a.platform}
+                    </span>
+                    <span className="col-span-3 text-xs text-slate-400 font-mono truncate">
+                      {a.account_id || "—"}
+                    </span>
+                    <span className="col-span-2 text-right font-semibold text-slate-800">
+                      {formatCurrency(a.cost)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Row 3: Top Cost Drivers */}
       <Card>
