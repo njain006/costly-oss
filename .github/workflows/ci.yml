@@ -1,70 +1,14 @@
 name: CI
 
-# Quality gate for every push and pull request.
-#
-# Layout:
-#   - Independent fast-feedback jobs (lint, tests, build) run in parallel.
-#   - Slow / dependent jobs (e2e) gate on the relevant fast jobs.
-#   - Concurrency groups cancel superseded runs on PRs but never on `main`,
-#     so a long-running release on `main` is never killed by a follow-up push.
-#
-# Reusable workflow refs (callable building blocks for future jobs):
-#   - .github/workflows/_setup-python.yml
-#   - .github/workflows/_setup-node.yml
-#
-# Audit jobs (pip-audit / npm audit) live in security.yml and are gated on
-# the `skip-audit` PR label so a contributor can opt out of vendor-advisory
-# noise on a clearly non-dependency PR.
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs on the same PR ref. Never cancel on `main`.
-# Pattern: https://docs.github.com/en/actions/using-jobs/using-concurrency
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
-# Default to least-privilege; individual jobs widen if they upload reports.
-permissions:
-  contents: read
-
 jobs:
-  # ─── Backend Lint (ruff + mypy, fast feedback) ─────────────────
-  backend-lint:
-    name: backend / lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install lint tooling
-        run: pip install ruff mypy
-
-      - name: ruff (lint)
-        run: ruff check backend
-        continue-on-error: true # advisory until ruff config baseline is clean
-
-      - name: ruff (format check)
-        run: ruff format --check backend
-        continue-on-error: true # advisory until first format pass lands
-
-      - name: mypy (types)
-        run: mypy backend/app --ignore-missing-imports --no-strict-optional
-        continue-on-error: true # advisory until type annotations land
-
-  # ─── Backend Tests (pytest + coverage → Codecov) ───────────────
+  # ─── Backend Tests (pytest) ─────────────────────────────────────
   backend-tests:
-    name: backend / tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -83,16 +27,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run tests with coverage
-        # Match the local green-bar invocation; ignore the heavy API integration
-        # suite that needs MongoDB (it runs in the e2e job instead).
-        run: |
-          pytest tests/ \
-            --ignore=tests/test_api.py \
-            --cov=app \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            --cov-report=html
+      - name: Run connector tests
+        run: pytest tests/ -v --tb=short --co -q 2>/dev/null; pytest tests/ -v --tb=short
         env:
           MONGO_URL: mongodb://localhost:27017
           DB_NAME: costly_test
@@ -102,58 +38,56 @@ jobs:
           LLM_PROVIDER: anthropic
           LLM_MODEL: test-model
 
-      - name: Upload coverage report (artifact)
+      - name: Run tests with coverage
+        run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=html -v
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: costly_test
+          JWT_SECRET: test-secret
+          ENCRYPTION_KEY: test-key-not-real
+          LLM_API_KEY: test-key
+          LLM_PROVIDER: anthropic
+          LLM_MODEL: test-model
+
+      - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-coverage-html
+          name: backend-coverage
           path: backend/htmlcov/
 
-      - name: Upload coverage to Codecov
-        # Token-less upload works on public repos. CODECOV_TOKEN secret is
-        # picked up automatically when set; required for private repos.
-        # Docs: https://docs.codecov.com/docs/codecov-uploader
+  # ─── Frontend Unit Tests (Vitest) ───────────────────────────────
+  frontend-unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-next
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
         if: always()
-        uses: codecov/codecov-action@v4
+        uses: actions/upload-artifact@v4
         with:
-          files: backend/coverage.xml
-          flags: backend
-          name: backend-coverage
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          name: frontend-coverage
+          path: frontend-next/coverage/
 
-  # ─── Frontend Lint (eslint + tsc --noEmit) ─────────────────────
-  frontend-lint:
-    name: frontend / lint
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend-next
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend-next/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: ESLint
-        run: npm run lint
-        continue-on-error: true # advisory until lint baseline is clean
-
-      - name: TypeScript (tsc --noEmit)
-        run: npm run typecheck
-        continue-on-error: true # advisory until type baseline is clean
-
-  # ─── Frontend Build (next build) ───────────────────────────────
+  # ─── Frontend Lint + Build ──────────────────────────────────────
   frontend-build:
-    name: frontend / build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -171,6 +105,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Lint
+        run: npm run lint || true
 
       - name: Build
         run: npm run build
@@ -178,9 +115,8 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
           NEXT_PUBLIC_GOOGLE_CLIENT_ID: test-client-id
 
-  # ─── Playwright E2E (depends on backend-tests + frontend-build) ─
+  # ─── Playwright E2E Tests ───────────────────────────────────────
   e2e-tests:
-    name: e2e / playwright
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-build]
     defaults:
@@ -265,9 +201,8 @@ jobs:
           name: playwright-report
           path: frontend-next/playwright-report/
 
-  # ─── Secret Scan ────────────────────────────────────────────────
+  # ─── No Secrets Check ──────────────────────────────────────────
   no-secrets:
-    name: security / no-secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -288,46 +223,3 @@ jobs:
             exit 1
           fi
           echo "PASS: No .env files tracked"
-
-  # ─── CI Summary (single required check for branch protection) ──
-  ci-summary:
-    name: ci / summary
-    runs-on: ubuntu-latest
-    needs:
-      - backend-lint
-      - backend-tests
-      - frontend-lint
-      - frontend-build
-      - e2e-tests
-      - no-secrets
-    if: always()
-    steps:
-      - name: Report status
-        env:
-          BACKEND_LINT: ${{ needs.backend-lint.result }}
-          BACKEND_TESTS: ${{ needs.backend-tests.result }}
-          FRONTEND_LINT: ${{ needs.frontend-lint.result }}
-          FRONTEND_BUILD: ${{ needs.frontend-build.result }}
-          E2E_TESTS: ${{ needs.e2e-tests.result }}
-          NO_SECRETS: ${{ needs.no-secrets.result }}
-        run: |
-          echo "backend-lint:    $BACKEND_LINT (advisory)"
-          echo "backend-tests:   $BACKEND_TESTS"
-          echo "frontend-lint:   $FRONTEND_LINT (advisory)"
-          echo "frontend-build:  $FRONTEND_BUILD"
-          echo "e2e-tests:       $E2E_TESTS"
-          echo "no-secrets:      $NO_SECRETS"
-          # Hard-required: tests, build, e2e, and secret scan must all pass.
-          # Lint jobs are advisory while baselines are being cleaned up.
-          fail=0
-          for pair in "backend-tests:$BACKEND_TESTS" "frontend-build:$FRONTEND_BUILD" \
-                     "e2e-tests:$E2E_TESTS" "no-secrets:$NO_SECRETS"; do
-            name="${pair%%:*}"
-            result="${pair##*:}"
-            if [ "$result" != "success" ]; then
-              echo "FAIL: required job $name=$result"
-              fail=1
-            fi
-          done
-          [ "$fail" -eq 0 ] && echo "All required CI jobs passed."
-          exit "$fail"
