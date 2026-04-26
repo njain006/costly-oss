@@ -178,9 +178,6 @@ jobs:
   # ─── Frontend Lint + Build ──────────────────────────────────────
   frontend-build:
     runs-on: ubuntu-latest
-
-  frontend-build:
-    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend-next
