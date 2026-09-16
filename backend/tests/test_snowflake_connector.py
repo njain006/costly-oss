@@ -620,6 +620,47 @@ class TestWarehouseSizePricing:
         assert by_resource["TINY_WH"].cost_usd == 6.0  # 2 * $3.00
 
 
+class TestRateSheetPricing:
+    """Credits are priced at the account's real EFFECTIVE_RATE from
+    ORGANIZATION_USAGE.RATE_SHEET_DAILY when available (gap G6)."""
+
+    def _cursor(self, rate_program):
+        return FakeCursor([
+            rate_program,
+            ("METERING_DAILY_HISTORY", Exception("SQL access control error: insufficient privileges")),
+            ("WAREHOUSE_METERING_HISTORY", [("2026-03-01", "WH1", 20.0, 0.0)]),
+        ])
+
+    def test_rate_sheet_overrides_list_price(self, sf_credentials):
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        conn = _build_connector_with_cursor(
+            sf_credentials, self._cursor(("RATE_SHEET_DAILY", [(2.10,)]))
+        )
+        compute = [c for c in conn.fetch_costs(days=7) if c.service == "snowflake_compute"]
+        assert compute
+        assert compute[0].cost_usd == 42.0  # 20 credits * $2.10 real rate
+
+    def test_explicit_price_beats_rate_sheet(self, sf_credentials):
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False, "credit_price_usd": 5.0}
+        conn = _build_connector_with_cursor(
+            sf_credentials, self._cursor(("RATE_SHEET_DAILY", [(2.10,)]))
+        )
+        compute = [c for c in conn.fetch_costs(days=7) if c.service == "snowflake_compute"]
+        assert compute
+        assert compute[0].cost_usd == 100.0  # explicit $5.00 wins over rate sheet
+
+    def test_rate_sheet_denied_falls_back_and_warns(self, sf_credentials):
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        conn = _build_connector_with_cursor(
+            sf_credentials,
+            self._cursor(("RATE_SHEET_DAILY", Exception("insufficient privileges"))),
+        )
+        compute = [c for c in conn.fetch_costs(days=7) if c.service == "snowflake_compute"]
+        assert compute
+        assert compute[0].cost_usd == 60.0  # falls back to $3.00 list default
+        assert any("RATE_SHEET_DAILY" in w for w in conn.warnings)
+
+
 # ---------------------------------------------------------------------------
 # Serverless views
 # ---------------------------------------------------------------------------

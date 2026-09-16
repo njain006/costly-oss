@@ -49,7 +49,7 @@ References
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -220,6 +220,10 @@ class PricingConfig:
     # and `drilldown=True` in metadata so callers can choose whether to
     # include or exclude them in aggregations. Default True.
     enable_ai_services_drilldown: bool = True
+    # True when the user pinned an explicit credit_price_usd/credit_price
+    # override. When False we prefer the account's real EFFECTIVE_RATE from
+    # ORGANIZATION_USAGE.RATE_SHEET_DAILY (if readable) over the list default.
+    credit_price_explicit: bool = False
 
     @classmethod
     def from_credentials(cls, credentials: dict) -> "PricingConfig":
@@ -235,10 +239,9 @@ class PricingConfig:
         edition = str(overrides.get("edition", "")).strip().lower()
         default_credit = DEFAULT_EDITION_PRICES.get(edition, DEFAULT_CREDIT_PRICE_USD)
 
-        credit_price = _positive(
-            overrides.get("credit_price_usd", overrides.get("credit_price")),
-            default_credit,
-        )
+        _explicit_price = overrides.get("credit_price_usd", overrides.get("credit_price"))
+        credit_price = _positive(_explicit_price, default_credit)
+        credit_price_explicit = _explicit_price is not None
 
         active_price = _positive(
             overrides.get("storage_price_per_tb", overrides.get("storage_price")),
@@ -308,6 +311,7 @@ class PricingConfig:
             cortex_model_prices=cortex_model_prices,
             prefer_org_usage=prefer_org_usage,
             enable_ai_services_drilldown=enable_ai_services_drilldown,
+            credit_price_explicit=credit_price_explicit,
         )
 
     def credit_price_for_warehouse(self, warehouse_size: Optional[str]) -> float:
@@ -555,6 +559,41 @@ class SnowflakeConnector(BaseConnector):
             return {"success": False, "message": str(e)}
 
     # ----- main entry --------------------------------------------------------
+    def _apply_rate_sheet(self, cur) -> None:
+        """Override the base credit price with the account's real EFFECTIVE_RATE
+        from ORGANIZATION_USAGE.RATE_SHEET_DAILY, so dollar figures reflect the
+        negotiated/capacity rate rather than the list default.
+
+        No-op when the user pinned an explicit price, or when the org view is
+        not readable (e.g. the role lacks ORGANIZATION_USAGE_VIEWER) — the list
+        default then stands.
+        """
+        if self.pricing.credit_price_explicit:
+            return
+        try:
+            cur.execute(
+                """
+                SELECT EFFECTIVE_RATE
+                FROM SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY
+                WHERE SERVICE_TYPE = 'COMPUTE'
+                ORDER BY DATE DESC
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+        except Exception as e:  # noqa: BLE001
+            self.warnings.append(
+                "RATE_SHEET_DAILY not readable (needs ORGANIZATION_USAGE_VIEWER); "
+                f"using list credit price ${self.pricing.credit_price_usd:.2f}: {e}"
+            )
+            return
+        try:
+            rate = float(row[0]) if row and row[0] is not None else 0.0
+        except (TypeError, ValueError):
+            rate = 0.0
+        if rate > 0:
+            self.pricing = replace(self.pricing, credit_price_usd=rate)
+
     def fetch_costs(self, days: int = 30) -> list[UnifiedCost]:
         """Fetch a normalized UnifiedCost list for the last `days` days.
 
@@ -582,6 +621,8 @@ class SnowflakeConnector(BaseConnector):
 
         try:
             cur = sf.cursor()
+            # Price credits at the account's real EFFECTIVE_RATE when available.
+            self._apply_rate_sheet(cur)
             try:
                 used_org_usage = False
                 if self.pricing.prefer_org_usage:
