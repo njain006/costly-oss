@@ -541,7 +541,7 @@ class TestMeteringDailyHistory:
         """When METERING_DAILY_HISTORY is denied, try WAREHOUSE_METERING_HISTORY."""
         sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
         warehouse_rows = [
-            ("2026-03-01", "ANALYTICS_WH", "LARGE", 20.0, 1.0),
+            ("2026-03-01", "ANALYTICS_WH", 20.0, 1.0),
         ]
         cursor = FakeCursor([
             ("METERING_DAILY_HISTORY", Exception("SQL access control error: insufficient privileges")),
@@ -591,8 +591,8 @@ class TestWarehouseSizePricing:
             ("METERING_DAILY_HISTORY", Exception("SQL access control error: insufficient privileges")),
             (
                 "WAREHOUSE_METERING_HISTORY",
-                [("2026-03-01", "BIG_WH", "LARGE", 10.0, 0.0),
-                 ("2026-03-01", "TINY_WH", "X-SMALL", 2.0, 0.0)],
+                [("2026-03-01", "BIG_WH", 10.0, 0.0),
+                 ("2026-03-01", "TINY_WH", 2.0, 0.0)],
             ),
             ("SERVERLESS_TASK_HISTORY", []),
             ("PIPE_USAGE_HISTORY", []),
@@ -614,8 +614,9 @@ class TestWarehouseSizePricing:
         costs = conn.fetch_costs(days=7)
         by_resource = {c.resource: c for c in costs
                        if c.metadata.get("source", "").endswith("WAREHOUSE_METERING_HISTORY")}
-        # LARGE uses the override, X-SMALL uses the base price.
-        assert by_resource["BIG_WH"].cost_usd == 45.0  # 10 * $4.50
+        # WAREHOUSE_METERING_HISTORY has no WAREHOUSE_SIZE column, so per-size
+        # overrides cannot apply from this path — both use the base price.
+        assert by_resource["BIG_WH"].cost_usd == 30.0  # 10 * $3.00
         assert by_resource["TINY_WH"].cost_usd == 6.0  # 2 * $3.00
 
 
@@ -671,7 +672,6 @@ class TestServerlessViews:
         ("SEARCH_OPTIMIZATION_HISTORY", "snowflake_search_optimization", CostCategory.compute),
         ("REPLICATION_USAGE_HISTORY", "snowflake_replication", CostCategory.storage),
         ("QUERY_ACCELERATION_HISTORY", "snowflake_query_acceleration", CostCategory.compute),
-        ("SNOWPIPE_STREAMING_CLIENT_HISTORY", "snowflake_snowpipe_streaming", CostCategory.ingestion),
         ("SNOWPARK_CONTAINER_SERVICES_HISTORY", "snowflake_snowpark_container_services", CostCategory.compute),
         ("HYBRID_TABLE_USAGE_HISTORY", "snowflake_hybrid_tables", CostCategory.compute),
     ])
@@ -688,7 +688,6 @@ class TestServerlessViews:
             "SEARCH_OPTIMIZATION_HISTORY",
             "REPLICATION_USAGE_HISTORY",
             "QUERY_ACCELERATION_HISTORY",
-            "SNOWPIPE_STREAMING_CLIENT_HISTORY",
             "SNOWPARK_CONTAINER_SERVICES_HISTORY",
             "HYBRID_TABLE_USAGE_HISTORY",
         ):
@@ -788,8 +787,8 @@ class TestQueryAttribution:
             (
                 "QUERY_ATTRIBUTION_HISTORY",
                 [
-                    ("2026-03-01", "alice", "ANALYST_ROLE", "ANALYTICS_WH", "etl_daily", 5.0),
-                    ("2026-03-01", "bob", "FINANCE_ROLE", "FIN_WH", None, 2.0),
+                    ("2026-03-01", "alice", "ANALYTICS_WH", "etl_daily", 5.0),
+                    ("2026-03-01", "bob", "FIN_WH", None, 2.0),
                 ],
             ),
             ("DATABASE_STORAGE_USAGE_HISTORY", []),
@@ -800,12 +799,13 @@ class TestQueryAttribution:
         attribution = [c for c in costs if c.service == "snowflake_attribution"]
         assert len(attribution) == 2
         alice = next(c for c in attribution if c.metadata["user_name"] == "alice")
-        assert alice.team == "ANALYST_ROLE"
+        # QUERY_ATTRIBUTION_HISTORY has no ROLE_NAME column, so team is unset.
+        assert alice.team is None
         assert alice.project == "etl_daily"
         assert alice.cost_usd == 15.0  # 5 credits @ $3
 
         bob = next(c for c in attribution if c.metadata["user_name"] == "bob")
-        assert bob.team == "FINANCE_ROLE"
+        assert bob.team is None
         assert bob.project is None
 
     def test_attribution_permission_denied_warns(self, sf_credentials):
@@ -1020,7 +1020,7 @@ class TestUnifiedCostCompliance:
                 "USAGE_IN_CURRENCY_DAILY",
                 [(date(2026, 3, 1), "A", "COMPUTE", "t", 1.0, "credits", 3.0, "USD")],
             ),
-            ("QUERY_ATTRIBUTION_HISTORY", [("2026-03-01", "u", "r", "w", "q", 1.0)]),
+            ("QUERY_ATTRIBUTION_HISTORY", [("2026-03-01", "u", "w", "q", 1.0)]),
             ("DATABASE_STORAGE_USAGE_HISTORY", [(date(2026, 3, 1), "DB", 1024**4, 0.0)]),
             ("TABLE_STORAGE_METRICS", []),
         ])
@@ -1140,8 +1140,8 @@ class TestCombinedScenario:
             (
                 "QUERY_ATTRIBUTION_HISTORY",
                 [
-                    ("2026-03-01", "alice", "ANALYST", "ETL_WH", "nightly", 20.0),
-                    ("2026-03-01", "svc_bot", "SERVICE", "ETL_WH", None, 15.0),
+                    ("2026-03-01", "alice", "ETL_WH", "nightly", 20.0),
+                    ("2026-03-01", "svc_bot", "ETL_WH", None, 15.0),
                 ],
             ),
             (

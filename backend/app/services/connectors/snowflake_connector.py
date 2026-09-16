@@ -798,12 +798,11 @@ class SnowflakeConnector(BaseConnector):
             SELECT
                 TO_CHAR(START_TIME, 'YYYY-MM-DD') AS D,
                 WAREHOUSE_NAME,
-                WAREHOUSE_SIZE,
                 SUM(CREDITS_USED_COMPUTE) AS CREDITS_COMPUTE,
                 SUM(CREDITS_USED_CLOUD_SERVICES) AS CREDITS_CLOUD
             FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
             WHERE START_TIME >= DATEADD(day, -{int(days)}, CURRENT_TIMESTAMP())
-            GROUP BY 1, 2, 3
+            GROUP BY 1, 2
             ORDER BY 1
         """
         try:
@@ -823,7 +822,8 @@ class SnowflakeConnector(BaseConnector):
 
         rows: list[UnifiedCost] = []
         for row in _fetchall(cur):
-            d, warehouse, wh_size, credits_compute, credits_cloud = row
+            d, warehouse, credits_compute, credits_cloud = row
+            wh_size = None  # WAREHOUSE_METERING_HISTORY has no WAREHOUSE_SIZE column
             compute = float(credits_compute or 0)
             cloud = float(credits_cloud or 0)
             credit_price = self.pricing.credit_price_for_warehouse(wh_size)
@@ -900,7 +900,7 @@ class SnowflakeConnector(BaseConnector):
         (
             "SNOWFLAKE.ACCOUNT_USAGE.SEARCH_OPTIMIZATION_HISTORY",
             "START_TIME",
-            "TABLE_NAME",
+            "BASE_TABLE_NAME",
             "SEARCH_OPTIMIZATION",
             "CREDITS_USED",
         ),
@@ -918,19 +918,16 @@ class SnowflakeConnector(BaseConnector):
             "QUERY_ACCELERATION",
             "CREDITS_USED",
         ),
-        (
-            "SNOWFLAKE.ACCOUNT_USAGE.SNOWPIPE_STREAMING_CLIENT_HISTORY",
-            "START_TIME",
-            "CLIENT_NAME",
-            "SNOWPIPE_STREAMING",
-            "CREDITS_USED",
-        ),
+        # NOTE: SNOWPIPE_STREAMING_CLIENT_HISTORY is intentionally omitted — it
+        # is a client event log (CLIENT_NAME, EVENT_TIMESTAMP, EVENT_TYPE,
+        # BLOB_SIZE_BYTES) with no credits/START_TIME columns, so it cannot be
+        # queried as a serverless credit line.
         # Snowpark Container Services (SPCS). The view name is
         # SNOWPARK_CONTAINER_SERVICES_HISTORY on newer accounts.
         (
             "SNOWFLAKE.ACCOUNT_USAGE.SNOWPARK_CONTAINER_SERVICES_HISTORY",
             "START_TIME",
-            "SERVICE_NAME",
+            "COMPUTE_POOL_NAME",
             "SNOWPARK_CONTAINER_SERVICES",
             "CREDITS_USED",
         ),
@@ -938,7 +935,7 @@ class SnowflakeConnector(BaseConnector):
         (
             "SNOWFLAKE.ACCOUNT_USAGE.HYBRID_TABLE_USAGE_HISTORY",
             "START_TIME",
-            "TABLE_NAME",
+            "OBJECT_NAME",
             "HYBRID_TABLE_REQUESTS",
             "CREDITS_USED",
         ),
@@ -1047,7 +1044,7 @@ class SnowflakeConnector(BaseConnector):
                     SELECT
                         TO_CHAR(START_TIME, 'YYYY-MM-DD') AS D,
                         'cortex_analyst' AS RES,
-                        SUM(CREDITS_USED) AS C
+                        SUM(CREDITS) AS C
                     FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_ANALYST_USAGE_HISTORY
                     WHERE START_TIME >= DATEADD(day, -{days}, CURRENT_TIMESTAMP())
                     GROUP BY 1, 2
@@ -1109,13 +1106,12 @@ class SnowflakeConnector(BaseConnector):
             SELECT
                 TO_CHAR(START_TIME, 'YYYY-MM-DD') AS D,
                 USER_NAME,
-                ROLE_NAME,
                 WAREHOUSE_NAME,
                 NULLIF(QUERY_TAG, '') AS QUERY_TAG,
                 SUM(CREDITS_ATTRIBUTED_COMPUTE) AS CREDITS
             FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY
             WHERE START_TIME >= DATEADD(day, -{int(days)}, CURRENT_TIMESTAMP())
-            GROUP BY 1, 2, 3, 4, 5
+            GROUP BY 1, 2, 3, 4
             HAVING CREDITS > 0
             ORDER BY 1
         """
@@ -1136,7 +1132,8 @@ class SnowflakeConnector(BaseConnector):
 
         rows: list[UnifiedCost] = []
         for row in _fetchall(cur):
-            d, user_name, role_name, warehouse, query_tag, credits = row
+            d, user_name, warehouse, query_tag, credits = row
+            role_name = None  # QUERY_ATTRIBUTION_HISTORY has no ROLE_NAME column
             c = float(credits or 0)
             if c <= 0:
                 continue
@@ -1328,8 +1325,8 @@ class SnowflakeConnector(BaseConnector):
             cur.execute(
                 """
                 SELECT
-                    AVERAGE_DATABASE_BYTES,
-                    AVERAGE_FAILSAFE_BYTES,
+                    STORAGE_BYTES,
+                    FAILSAFE_BYTES,
                     USAGE_DATE
                 FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
                 ORDER BY USAGE_DATE DESC
