@@ -17,10 +17,13 @@ def build_sf_connection(conn_doc: dict):
         "warehouse": conn_doc["warehouse"],
         "database": conn_doc["database"],
         "schema": conn_doc["schema_name"],
-        "role": conn_doc["role"],
         "login_timeout": 15,
         "network_timeout": 30,
     }
+    # A blank role falls through to the user's Snowflake DEFAULT_ROLE
+    # (COSTLY_SVC -> COSTLY_READER) instead of forcing ACCOUNTADMIN.
+    if conn_doc.get("role"):
+        params["role"] = conn_doc["role"]
     if conn_doc["auth_type"] == "password":
         params["password"] = decrypt_value(conn_doc["password_encrypted"])
     elif conn_doc["auth_type"] == "keypair":

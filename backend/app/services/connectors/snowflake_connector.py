@@ -359,19 +359,31 @@ class SnowflakePermissionError(RuntimeError):
         self.view = view
         self.role = role
         self.original = original
-        database = "SNOWFLAKE"
-        if "ORGANIZATION_USAGE" in view.upper():
-            message = (
-                f"Role {role!r} cannot read {view}. "
-                "Grant: GRANT APPLY TAG ON ACCOUNT TO ROLE "
-                f"{role}; plus GRANT DATABASE ROLE SNOWFLAKE.ORGANIZATION_USAGE_VIEWER "
-                f"TO ROLE {role};"
-            )
+        upper = view.upper()
+        # Snowflake exposes ACCOUNT_USAGE / ORGANIZATION_USAGE through least-privilege
+        # database roles. Pick the one that actually grants the failing view instead of
+        # blanket IMPORTED PRIVILEGES (and the previous, unrelated "APPLY TAG" grant).
+        if "ORGANIZATION_USAGE" in upper:
+            db_role = "SNOWFLAKE.ORGANIZATION_USAGE_VIEWER"
+            note = " (must be granted by an ORGADMIN)"
+        elif any(
+            k in upper
+            for k in ("QUERY_ATTRIBUTION", "QUERY_HISTORY", "QUERY_METERING", "ACCESS_HISTORY")
+        ):
+            # Query-level views live behind GOVERNANCE_VIEWER, not USAGE_VIEWER.
+            db_role = "SNOWFLAKE.GOVERNANCE_VIEWER"
+            note = ""
         else:
-            message = (
-                f"Role {role!r} cannot read {view}. "
-                f"Grant: GRANT IMPORTED PRIVILEGES ON DATABASE {database} TO ROLE {role};"
-            )
+            db_role = "SNOWFLAKE.USAGE_VIEWER"
+            note = ""
+        message = (
+            f"Role {role!r} cannot read {view}. "
+            f"Grant the least-privilege database role: "
+            f"GRANT DATABASE ROLE {db_role} TO ROLE {role};{note} "
+            f"(Broad alternative: GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE "
+            f"{role}; — note IMPORTED PRIVILEGES can only be granted to account roles, "
+            f"not database roles.)"
+        )
         super().__init__(message)
 
 
@@ -397,7 +409,7 @@ def _to_conn_doc(credentials: dict) -> dict:
         "warehouse": credentials.get("warehouse", "COMPUTE_WH"),
         "database": credentials.get("database", "SNOWFLAKE"),
         "schema_name": credentials.get("schema_name", "ACCOUNT_USAGE"),
-        "role": credentials.get("role", "ACCOUNTADMIN"),
+        "role": credentials.get("role", ""),
     }
     if doc["auth_type"] == "password":
         password = credentials.get("password", "")
