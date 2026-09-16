@@ -314,9 +314,9 @@ def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
 
 
 def sync_storage(conn_doc: dict, days: int) -> dict:
-    with sf_connection(conn_doc) as sf:
-        cur = sf.cursor()
-        cur.execute("""
+    sf = build_sf_connection(conn_doc)
+    cur = sf.cursor()
+    cur.execute("""
             SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME,
                ACTIVE_BYTES / 1073741824.0             AS active_gb,
                TIME_TRAVEL_BYTES / 1073741824.0        AS time_travel_gb,
