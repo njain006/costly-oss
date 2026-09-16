@@ -49,26 +49,36 @@ def _platform_conn_to_sf_doc(pc: dict) -> dict:
 
     creds = pc.get("credentials", {})
 
+    def _dec(value: str) -> str:
+        """Fields in `credentials` may be encrypted (e.g. user) or stored plain
+        (e.g. account). Decrypt when we can, otherwise use the value as-is."""
+        if not value:
+            return value
+        try:
+            return decrypt_value(value)
+        except Exception:
+            return value
+
     # Decrypt the private key, then re-encrypt it as private_key_encrypted
     # (build_sf_connection expects to decrypt it itself)
     private_key_raw = creds.get("private_key", "")
     try:
         # It may already be encrypted from add_platform_connection
-        private_key_decrypted = decrypt_value(private_key_raw)
+        decrypt_value(private_key_raw)
         private_key_encrypted = private_key_raw  # Already encrypted
     except Exception:
         # Not encrypted, encrypt it for build_sf_connection
         private_key_encrypted = encrypt_value(private_key_raw)
 
     return {
-        "account": creds.get("account", ""),
-        "username": creds.get("user", ""),
+        "account": _dec(creds.get("account", "")),
+        "username": _dec(creds.get("user", "")),
         "auth_type": "keypair",
         "private_key_encrypted": private_key_encrypted,
-        "warehouse": creds.get("warehouse", "COMPUTE_WH"),
-        "database": creds.get("database", "SNOWFLAKE"),
-        "schema_name": creds.get("schema_name", "ACCOUNT_USAGE"),
-        "role": creds.get("role", "ACCOUNTADMIN"),
+        "warehouse": _dec(creds.get("warehouse", "")) or "COMPUTE_WH",
+        "database": _dec(creds.get("database", "")) or "SNOWFLAKE",
+        "schema_name": _dec(creds.get("schema_name", "")) or "ACCOUNT_USAGE",
+        "role": _dec(creds.get("role", "")),
         "is_active": True,
         "connection_id": str(pc.get("_id", "")),
         "connection_name": pc.get("name", "Snowflake"),
