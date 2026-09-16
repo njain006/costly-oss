@@ -1,3 +1,4 @@
+import logging
 import math
 import snowflake.connector
 from contextlib import contextmanager
@@ -125,39 +126,63 @@ def sync_dashboard(conn_doc: dict, days: int, credit_price: float) -> dict:
             {"name": r[0], "credits": round(float(r[1] or 0), 2), "cost": round(float(r[2] or 0), 2)}
             for r in cur.fetchall()
         ]
-        cur.execute(f"""
-            SELECT
-                COUNT(*) AS total_queries,
-                COUNT_IF(TOTAL_ELAPSED_TIME > 60000) AS expensive_queries,
-                COUNT_IF(EXECUTION_STATUS != 'SUCCESS') AS failed_queries
-            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-              AND IS_CLIENT_GENERATED_STATEMENT = FALSE
-        """)
-        row = cur.fetchone()
-        total_queries = int(row[0] or 0)
-        expensive_queries = int(row[1] or 0)
-        failed_queries = int(row[2] or 0)
-        cur.execute(f"""
-            SELECT USER_NAME,
-                   SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
-                   COUNT(*) AS queries
-            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-            WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-              AND IS_CLIENT_GENERATED_STATEMENT = FALSE
-            GROUP BY 1 ORDER BY 2 DESC LIMIT 10
-        """)
-        top_users = [
-            {"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": int(r[2] or 0)}
-            for r in cur.fetchall()
-        ]
-        cur.execute("""
-            SELECT (STORAGE_BYTES + STAGE_BYTES + FAILSAFE_BYTES) / 1073741824.0
-            FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
-            ORDER BY USAGE_DATE DESC LIMIT 1
-        """)
-        row = cur.fetchone()
-        storage_gb = round(float(row[0] or 0), 1) if row else 0.0
+        # Query-level metrics need GOVERNANCE_VIEWER on ACCOUNT_USAGE.QUERY_HISTORY.
+        # If that grant is missing, degrade gracefully (show 0) instead of letting
+        # one denied query blank the entire dashboard.
+        total_queries = expensive_queries = failed_queries = 0
+        try:
+            cur.execute(f"""
+                SELECT
+                    COUNT(*) AS total_queries,
+                    COUNT_IF(TOTAL_ELAPSED_TIME > 60000) AS expensive_queries,
+                    COUNT_IF(EXECUTION_STATUS != 'SUCCESS') AS failed_queries
+                FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+                WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+                  AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+            """)
+            row = cur.fetchone()
+            total_queries = int(row[0] or 0)
+            expensive_queries = int(row[1] or 0)
+            failed_queries = int(row[2] or 0)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "QUERY_HISTORY unavailable for dashboard (needs GOVERNANCE_VIEWER)",
+                exc_info=True,
+            )
+
+        top_users: list[dict] = []
+        try:
+            cur.execute(f"""
+                SELECT USER_NAME,
+                       SUM(CREDITS_USED_CLOUD_SERVICES * {credit_price}) AS cost,
+                       COUNT(*) AS queries
+                FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+                WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+                  AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+                GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+            """)
+            top_users = [
+                {"user": r[0], "cost": round(float(r[1] or 0), 2), "queries": int(r[2] or 0)}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "QUERY_HISTORY top-users unavailable for dashboard", exc_info=True
+            )
+
+        storage_gb = 0.0
+        try:
+            cur.execute("""
+                SELECT (STORAGE_BYTES + STAGE_BYTES + FAILSAFE_BYTES) / 1073741824.0
+                FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
+                ORDER BY USAGE_DATE DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            storage_gb = round(float(row[0] or 0), 1) if row else 0.0
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "STORAGE_USAGE unavailable for dashboard", exc_info=True
+            )
 
     raw_costs = [d["cost"] for d in cost_trend]
     anomalies = []
