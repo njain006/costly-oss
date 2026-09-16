@@ -976,6 +976,26 @@ class TestStructuredErrors:
         msg = str(err)
         assert "ORGANIZATION_USAGE_VIEWER" in msg or "ORGANIZATION_USAGE" in msg
 
+    def test_account_usage_error_recommends_usage_viewer(self):
+        err = SnowflakePermissionError(
+            view="SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY",
+            role="COSTLY_READ",
+        )
+        msg = str(err)
+        # Least-privilege database role, not blanket IMPORTED PRIVILEGES.
+        assert "SNOWFLAKE.USAGE_VIEWER" in msg
+        # The unrelated APPLY TAG grant must not be suggested.
+        assert "APPLY TAG" not in msg
+
+    def test_query_level_view_error_recommends_governance_viewer(self):
+        err = SnowflakePermissionError(
+            view="SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY",
+            role="COSTLY_READ",
+        )
+        msg = str(err)
+        # Query-level views require GOVERNANCE_VIEWER, not USAGE_VIEWER.
+        assert "SNOWFLAKE.GOVERNANCE_VIEWER" in msg
+
     def test_no_silent_failure_on_connection(self, sf_credentials):
         conn = SnowflakeConnector(sf_credentials)
 
