@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.database import db
 from app.services.cache import cache
 from app.services.snowflake import (
@@ -37,13 +37,14 @@ router = APIRouter(tags=["optimization"])
 async def warehouse_sizing(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"recommendations": [], "total_monthly_savings": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:warehouse_sizing:{days}"
+    cache_key = f"{scope}:warehouse_sizing:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -59,13 +60,14 @@ async def warehouse_sizing(
 async def autosuspend_analysis(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"recommendations": [], "total_monthly_savings": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:autosuspend:{days}"
+    cache_key = f"{scope}:autosuspend:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -81,13 +83,14 @@ async def autosuspend_analysis(
 async def spillage(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"by_warehouse": [], "by_user": [], "top_queries": [], "summary": {"total_spill_gb": 0, "affected_queries": 0, "affected_warehouses": 0}, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:spillage:{days}"
+    cache_key = f"{scope}:spillage:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -102,13 +105,14 @@ async def spillage(
 async def query_patterns(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"patterns": [], "total_patterns": 0, "total_cost_usd": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:query_patterns:{days}"
+    cache_key = f"{scope}:query_patterns:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -124,13 +128,14 @@ async def query_patterns(
 async def cost_attribution(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"by_user": [], "by_role": [], "by_database": [], "by_warehouse": [], "top_queries": [], "total_cost_usd": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:cost_attribution:{days}"
+    cache_key = f"{scope}:cost_attribution:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -146,13 +151,14 @@ async def cost_attribution(
 async def stale_tables(
     days: int = Query(30, ge=1, le=90),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"stale_tables": [], "stale_count": 0, "stale_total_gb": 0, "stale_monthly_cost": 0, "days": 30, "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:stale_tables:{days}"
+    cache_key = f"{scope}:stale_tables:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
@@ -167,14 +173,15 @@ async def stale_tables(
 async def resize_warehouse(
     name: str,
     body: WarehouseResize,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await run_in_thread(sync_execute_resize, source, name, body.new_size)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -182,15 +189,16 @@ async def resize_warehouse(
 async def update_autosuspend(
     name: str,
     body: WarehouseAutoSuspend,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await run_in_thread(sync_execute_autosuspend, source, name, body.seconds)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:autosuspend")
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:autosuspend")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -201,14 +209,15 @@ async def update_autosuspend(
 async def optimization_resize_warehouse(
     name: str,
     body: WarehouseResize,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_resize(source, name, body.new_size, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -220,43 +229,46 @@ class AutoSuspendBody(BaseModel):
 async def optimization_set_autosuspend(
     name: str,
     body: AutoSuspendBody,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_autosuspend(source, name, body.seconds, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:autosuspend")
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:autosuspend")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 
 @router.post("/api/optimization/warehouses/{name}/suspend")
 async def optimization_suspend_warehouse(
     name: str,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_suspend(source, name, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 
 @router.post("/api/optimization/warehouses/{name}/resume")
 async def optimization_resume_warehouse(
     name: str,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_resume(source, name, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{user_id}:warehouse")
+        cache.delete_prefix(f"{scope}:warehouse")
     return result
 
 

@@ -1,5 +1,9 @@
 "use client";
 
+import UserTypeFilter, { filterByUserType, useUserTypeFilter } from "@/components/user-type-filter";
+
+import LoadError from "@/components/load-error";
+
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
 import api from "@/lib/api";
@@ -51,8 +55,9 @@ export default function DashboardPage() {
   const { days, refreshTrigger } = useDateRange();
   // Local overrides so a click flips the badge immediately.
   const [typeOverride, setTypeOverride] = useState<Record<string, "service" | "human">>({});
-  const { data, loading } = useApi<DashboardData>(
-    `/dashboard?days=${days}&refresh=${refreshTrigger > 0}`,
+  const userType = useUserTypeFilter();
+  const { data, loading, error: loadError } = useApi<DashboardData>(
+    `/dashboard?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
 
@@ -68,6 +73,7 @@ export default function DashboardPage() {
 
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -145,31 +151,13 @@ export default function DashboardPage() {
 
           {/* Top Users (anomalies are summarised at the top and on the Anomalies page) */}
           <div className="grid gap-6">
-            <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-red-500" />
-                    Cost Anomalies
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {data.anomalies.map((a) => (
-                      <div key={a.date} className="p-3 bg-red-50 rounded-lg border border-red-100">
-                        <div className="font-medium text-sm text-red-800">{a.label}</div>
-                        <div className="text-xs text-red-600 mt-1">
-                          {a.date} &middot; {formatCurrency(a.cost)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">Top Users by Cost</CardTitle>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="text-base">Top Users by Cost</CardTitle>
+                  <UserTypeFilter />
+                </div>
               </CardHeader>
               <CardContent>
                 {data.cost_by_user_type && (
@@ -180,7 +168,7 @@ export default function DashboardPage() {
                   </div>
                 )}
                 <div className="space-y-2">
-                  {data.top_users.map((u, i) => {
+                  {filterByUserType(data.top_users, userType, (u) => typeOverride[u.user] ?? u.type).map((u, i) => {
                     const t = typeOverride[u.user] ?? u.type ?? "human";
                     const flip = async () => {
                       const next = t === "service" ? "human" : "service";

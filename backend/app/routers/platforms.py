@@ -216,6 +216,24 @@ async def sync_costs(
     return result
 
 
+@router.delete("/{connection_id}")
+async def delete_connection(connection_id: str, user_id: str = Depends(get_current_user)):
+    """Remove a connection, its stored credentials, and the data synced from it."""
+    try:
+        oid = ObjectId(connection_id)
+    except Exception:
+        raise HTTPException(404, "Connection not found")
+    res = await db.platform_connections.delete_one({"_id": oid, "user_id": user_id})
+    if not res.deleted_count:
+        raise HTTPException(404, "Connection not found")
+    costs = await db.unified_costs.delete_many({"user_id": user_id, "connection_id": connection_id})
+    await db.query_history.delete_many({"user_id": user_id, "connection_id": connection_id})
+    # Cached pages were built from this account; recompute on next visit.
+    from app.services.cache import cache
+    cache.clear_prefix(f"{user_id}:")
+    return {"success": True, "removed_cost_rows": costs.deleted_count}
+
+
 class PricingOverrideRequest(BaseModel):
     pricing_overrides: dict
 
@@ -238,8 +256,7 @@ async def set_user_type(connection_id: str, body: UserTypeRequest, user_id: str 
     if not res.matched_count:
         raise HTTPException(404, "Connection not found")
     from app.services.cache import cache
-    for k in ("dashboard:7", "dashboard:14", "dashboard:30", "dashboard:90"):
-        cache.delete(f"{user_id}:{k}")
+    cache.clear_prefix(f"{user_id}:{connection_id}:dashboard")
     return {"success": True}
 
 
@@ -259,8 +276,15 @@ async def set_pricing(
     """
     ok = await update_pricing_overrides(user_id, connection_id, body.pricing_overrides)
     if not ok:
-        raise HTTPException(404, "Connection not found")
-    return {"success": True, "message": "Pricing overrides updated. Re-sync to apply."}
+        # Saving the same values again is not an error.
+        exists = await db.platform_connections.find_one({"_id": ObjectId(connection_id), "user_id": user_id})
+        if not exists:
+            raise HTTPException(404, "Connection not found")
+    # Prices are baked into cached pages and the credit-price cache.
+    from app.services.cache import cache
+    cache.delete(f"credit_price:{connection_id}")
+    cache.clear_prefix(f"{user_id}:{connection_id}:")
+    return {"success": True, "message": "Pricing overrides updated. Re-sync to apply to cost history."}
 
 
 @router.get("/{connection_id}/pricing")

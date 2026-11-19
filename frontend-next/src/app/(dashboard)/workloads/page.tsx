@@ -57,11 +57,11 @@ const flagColors: Record<string, string> = {
 export default function WorkloadsPage() {
   const { days, refreshTrigger } = useDateRange();
   const { data, loading, error } = useApi<WorkloadsData>(
-    `/workloads?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/workloads?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: patternData } = useApi<QueryPatternData>(
-    `/query-patterns?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/query-patterns?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const [selectedWl, setSelectedWl] = useState<Workload | null>(null);
@@ -141,7 +141,7 @@ export default function WorkloadsPage() {
                     ))}
                   </TableBody>
                 </Table>
-                {data.workloads.length === 0 && <AccessHint what="workloads" denied={(data as { query_history_available?: boolean }).query_history_available === false} />}
+                {data.workloads.length === 0 && <AccessHint what="workloads" denied={(data as { query_history_available?: boolean }).query_history_available === false} timedOut={(data as { query_history_timed_out?: boolean }).query_history_timed_out === true} />}
               </CardContent>
             </Card>
 

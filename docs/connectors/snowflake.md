@@ -205,6 +205,28 @@ WHERE GRANTEE_NAME = 'COSTLY_READER' AND DELETED_ON IS NULL;
 - **Cost per user leaves out idle time.** It comes from `QUERY_ATTRIBUTION_HISTORY`, which skips warehouse idle time, cloud services and queries under about 100 ms. It adds up to less than the bill on purpose; the gap is shown as idle spend per warehouse.
 - **Idle spend** is `CREDITS_USED_COMPUTE − CREDITS_ATTRIBUTED_COMPUTE_QUERIES` per warehouse. It includes the auto-suspend tail, the 60-second minimum billed on every start, and gaps between queries. It is the most that tuning can save, not a promise.
 - **Per-query attribution history** is only complete from mid-August 2024.
+- **Auto-suspend savings are a replay, not a guess.** Costly replays every gap between a warehouse's queries (measured from the latest end of any earlier query, so overlapping queries make no fake gaps) at the current setting and at 60s. A gap shorter than the setting bills the whole gap; a longer one bills the setting, then the next query pays a restart: Snowflake bills at least 60s per start, so a short query after a restart adds `60s − its runtime`. Each suggestion shows the extra restarts per month. When the replay explains less than 75% of a warehouse's measured idle (common with multi-cluster warehouses), the saving is flagged as a rough guide.
+- **Several accounts.** Connect each Snowflake account separately. Snowflake pages show one account at a time; pick it in the sidebar (shown once you have two or more). Every API endpoint takes `?connection_id=`; without it, the most recently synced account is used. Overview pages add all accounts up.
+
+### Warehouse health (queue and spill)
+
+Warehouses → **Health: queue & spill** reads `QUERY_HISTORY` (needs `GOVERNANCE_VIEWER`) and flags each warehouse in plain language:
+
+| Finding | Rule (last N days) | What to do |
+|---|---|---|
+| Out of memory | ≥ 1 GB spilled to **remote** storage | One size up for those queries, or rewrite them. A size up costs 2x per hour; spilling queries often run more than 2x faster. |
+| Queueing | ≥ 1% of queries waited for capacity, or the slowest 5% of waits ≥ 10s (with 10+ queued) | More clusters (`MAX_CLUSTER_COUNT`) or move a workload. A bigger size only helps if queries are slow. |
+| Memory pressure | ≥ 10% of query time is in queries that spill to **local** disk | If those queries are slow, try one size up. |
+| Cold starts | ≥ 1 hour total waiting for a warehouse to start | Normal with short auto-suspend. |
+| Maybe oversized | None of the above, average load < 0.2, and not already X-Small | Test one size down; queries that use the parallelism will run longer. |
+
+No finding comes with a headline saving: a size change trades cost against speed, so test it.
+
+### Background refresh, and what it costs
+
+Snowflake pages are computed in the background so they open instantly. Each run queries `ACCOUNT_USAGE` on your warehouse: roughly 10–15 minutes of an X-Small on a busy account (about 0.2 credits). Set how often with `PREWARM_INTERVAL_HOURS` in `backend/.env` (default 6; 24 is plenty for daily review; 0 turns it off). Ranges that are not precomputed (14 and 90 days) run live the first time and are then cached.
+
+If the warehouse has a resource monitor, size its quota for this. When the quota is used up, Snowflake refuses to start the warehouse (error `090073`); Costly then shows "This page could not be refreshed" with the reason on every Snowflake page, and stops the background refresh until the next run. Raise the quota or wait for its reset.
 
 
 ## Pricing Model (from vendor)
@@ -706,6 +728,7 @@ Source: `backend/app/services/connectors/snowflake_connector.py` (~1,220 lines, 
 
 ## Change Log
 
+- 2026-11-19: **Several accounts, warehouse health, safer setup.** Connect more than one Snowflake account (unique key now includes `connection_id`; per-account cache keys; sidebar picker; `?connection_id=` on every endpoint; alerts and query-history sync cover all accounts). Warehouse health tab for queue and spill. Auto-suspend replay counts the 60s restart charge. Anomalies: one card per spike or multi-day episode, trailing baseline, cause computed from the cost lines that rose. Query list ranks on narrow columns first (30/90-day ranges no longer time out); a timeout is reported as a timeout, not missing permission. Resource-monitor quota errors are shown clearly. Background refresh interval is configurable.
 - 2026-11-19: **Setup and Permissions section; billing reconciliation fixes.** Least-privilege setup (`USAGE_VIEWER` only, no `IMPORTED PRIVILEGES`), page-by-grant table, price settings (`ai_credit_price` new). Connector: serverless and time-travel rows are drill-down only (METERING_DAILY_HISTORY already bills them); billed-USD path keeps the negative cloud services adjustment, filters to `CURRENT_ACCOUNT()`, skips STORAGE (priced per database); AI service types priced as AI credits; stale rows removed on re-sync. Verified against `USAGE_IN_CURRENCY_DAILY` on a production account: within 0.1% over 30 days.
 
 - 2026-04-24: Initial knowledge-base created by overnight research run.

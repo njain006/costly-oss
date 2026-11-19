@@ -1,5 +1,7 @@
 "use client";
 
+import LoadError from "@/components/load-error";
+
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
 import DateRangePicker from "@/components/date-range-picker";
@@ -49,12 +51,12 @@ interface StaleTableData {
 
 export default function StoragePage() {
   const { days, refreshTrigger } = useDateRange();
-  const { data, loading } = useApi<StorageData>(
-    `/storage?days=${days}&refresh=${refreshTrigger > 0}`,
+  const { data, loading, error: loadError } = useApi<StorageData>(
+    `/storage?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: staleData } = useApi<StaleTableData>(
-    `/stale-tables?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/stale-tables?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
 
@@ -69,6 +71,7 @@ export default function StoragePage() {
       </div>
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <Skeleton className="h-80 rounded-lg" />
       ) : data ? (

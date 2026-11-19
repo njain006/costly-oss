@@ -1763,7 +1763,46 @@ class TestTolerantCursor:
         assert cur.fetchall() == []
         assert timed_out == {"SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY"}
 
+    def test_resource_monitor_quota_raises_a_clear_error(self):
+        from app.services.connectors.errors import QuotaExceededError
+        cur, missing, timed_out = self._cursor(self._err(
+            90073, "Warehouse 'X_WH' cannot be resumed because resource monitor 'GUARD' has exceeded its quota."))
+        with pytest.raises(QuotaExceededError) as ei:
+            cur.execute("SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY")
+        assert "resource monitor" in str(ei.value)
+        assert not missing and not timed_out  # not reported as a permission gap
+
     def test_write_always_raises(self):
         cur, _, _ = self._cursor(self._err(2003))
         with pytest.raises(_FakeProgrammingError):
             cur.execute("ALTER WAREHOUSE X SET AUTO_SUSPEND = 60 -- ACCOUNT_USAGE.")
+
+
+class TestServiceAccountGuess:
+    """Name-only guess: whole name parts, not substrings."""
+
+    @pytest.mark.parametrize("name", [
+        "ACME_DBT_USER", "AIRBYTE_LOADER", "FIVETRANLOADER", "EXAMPLE_INTEGRATION", "LOOKER_SVC",
+        "TABLEAU", "SVC_REPORTING", "ETL_BOT", "HIGHTOUCH", "DBTCLOUD",
+    ])
+    def test_service_names(self, name):
+        from app.services.snowflake import looks_like_service_account
+        assert looks_like_service_account(name)
+
+    @pytest.mark.parametrize("name", [
+        "DOMINIC", "ALEXHEXTON", "JSMITH", "MARIA.GARCIA", "SIGMUND", "MODEST", "SELECTA", "APPLEBY",
+    ])
+    def test_people_names(self, name):
+        from app.services.snowflake import looks_like_service_account
+        assert not looks_like_service_account(name)
+
+    def test_manual_tag_wins_over_guess(self):
+        from app.services.snowflake import classify_users
+
+        class Cur:
+            def execute(self, *a, **k): pass
+            def fetchall(self): return []
+
+        out = classify_users(Cur(), {"user_types": {"ACME_DBT_USER": "human"}}, ["ACME_DBT_USER", "JSMITH"])
+        assert out["ACME_DBT_USER"] == ("human", "manual")
+        assert out["JSMITH"] == ("human", "guess")

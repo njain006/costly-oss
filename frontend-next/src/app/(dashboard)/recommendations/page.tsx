@@ -1,5 +1,7 @@
 "use client";
 
+import LoadError from "@/components/load-error";
+
 import { useState } from "react";
 import { useApi } from "@/hooks/use-api";
 import api from "@/lib/api";
@@ -38,7 +40,7 @@ const priorityColors: Record<string, "destructive" | "default" | "secondary"> = 
 };
 
 export default function RecommendationsPage() {
-  const { data, loading } = useApi<Recommendation[]>("/recommendations");
+  const { data, loading, error: loadError } = useApi<Recommendation[]>("/recommendations");
   const totalSavings = data?.reduce((sum, r) => sum + (r.potential_savings || 0), 0) || 0;
   // One script with every fix, biggest saving first, so the whole plan can
   // be reviewed and run in a single Snowsight worksheet.
@@ -110,6 +112,7 @@ export default function RecommendationsPage() {
       </div>
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (

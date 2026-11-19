@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_dashboard, get_credit_price
 from app.services.demo import generate_demo_dashboard
@@ -16,9 +16,10 @@ router = APIRouter(tags=["dashboard"])
 async def dashboard(
     days: int = Query(30, ge=1, le=365),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {
@@ -28,7 +29,7 @@ async def dashboard(
             "top_users": [], "credit_price": 0, "days": days,
             "anomalies": [], "fetched_at": fetched_at, "demo": True,
         }
-    cache_key = f"{user_id}:dashboard:{days}"
+    cache_key = f"{scope}:dashboard:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)

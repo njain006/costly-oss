@@ -1,5 +1,7 @@
 "use client";
 
+import UserTypeFilter, { filterByUserType, useUserTypeFilter } from "@/components/user-type-filter";
+
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
 import DateRangePicker from "@/components/date-range-picker";
@@ -17,6 +19,8 @@ interface QueryData {
   data: Array<{
     query_id: string;
     user: string;
+    user_type?: string;
+    user_type_source?: string;
     warehouse: string;
     duration_ms: number;
     bytes_scanned: number;
@@ -36,9 +40,11 @@ interface QueryData {
 export default function QueryPerformancePage() {
   const { days, refreshTrigger } = useDateRange();
   const { data, loading, error } = useApi<QueryData>(
-    `/queries?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/queries?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
+  const userType = useUserTypeFilter();
+  const rowsShown = filterByUserType(data?.data ?? [], userType, (q) => q.user_type);
 
   const phaseData = data?.data.slice(0, 10).map((q) => ({
     id: q.query_id.slice(0, 8),
@@ -96,7 +102,17 @@ export default function QueryPerformancePage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Queries ({data.total} total)</CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-base">Queries ({data.total.toLocaleString()} total)</CardTitle>
+                <div className="flex items-center gap-2">
+                  {userType !== "all" && (
+                    <span className="text-xs text-muted-foreground">
+                      {rowsShown.length} of the {data.data.length} slowest on this page
+                    </span>
+                  )}
+                  <UserTypeFilter />
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <Table>
@@ -111,9 +127,9 @@ export default function QueryPerformancePage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.data.map((q) => (
+                  {rowsShown.map((q) => (
                     <TableRow key={q.query_id}>
-                      <TableCell className="font-medium text-sm">{q.user}</TableCell>
+                      <TableCell className="font-medium text-sm">{q.user}{q.user_type && <span className="ml-1.5 text-[10px] text-muted-foreground">{q.user_type === "service" ? "service" : "person"}{q.user_type_source === "guess" ? "?" : ""}</span>}</TableCell>
                       <TableCell className="text-sm">{q.warehouse}</TableCell>
                       <TableCell className="text-sm">{formatDuration(q.duration_ms)}</TableCell>
                       <TableCell className="text-sm">{formatBytes(q.bytes_scanned)}</TableCell>
@@ -129,7 +145,7 @@ export default function QueryPerformancePage() {
                   ))}
                 </TableBody>
               </Table>
-              {data.data.length === 0 && <AccessHint what="queries" denied={(data as { query_history_available?: boolean }).query_history_available === false} />}
+              {data.data.length === 0 && <AccessHint what="queries" denied={(data as { query_history_available?: boolean }).query_history_available === false} timedOut={(data as { query_history_timed_out?: boolean }).query_history_timed_out === true} />}
             </CardContent>
           </Card>
         </>

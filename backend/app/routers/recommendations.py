@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_recommendations, get_credit_price
 
@@ -13,12 +13,13 @@ router = APIRouter(tags=["recommendations"])
 @router.get("/api/recommendations")
 async def recommendations(
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         return []
-    cache_key = f"{user_id}:recommendations"
+    cache_key = f"{scope}:recommendations"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)

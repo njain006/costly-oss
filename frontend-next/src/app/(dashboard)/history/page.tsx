@@ -1,5 +1,7 @@
 "use client";
 
+import LoadError from "@/components/load-error";
+
 import { useState, useCallback } from "react";
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
@@ -41,7 +43,7 @@ export default function QueryHistoryPage() {
   if (status) params.set("status", status);
   if (search) params.set("query_text_search", search);
 
-  const { data, loading, refetch } = useApi<HistoryData>(
+  const { data, loading, error: loadError, refetch } = useApi<HistoryData>(
     `/history/queries?${params.toString()}`,
     [days, warehouse, status, search, page]
   );
@@ -122,6 +124,7 @@ export default function QueryHistoryPage() {
         </div>
       )}
 
+      <LoadError error={loadError} />
       {loading ? (
         <Skeleton className="h-80 rounded-lg" />
       ) : data ? (
@@ -161,7 +164,7 @@ export default function QueryHistoryPage() {
                 ))}
               </TableBody>
             </Table>
-              {data.data.length === 0 && <AccessHint what="query history" denied={(data as { query_history_available?: boolean }).query_history_available === false} />}
+              {data.data.length === 0 && <AccessHint what="query history" denied={(data as { query_history_available?: boolean }).query_history_available === false} timedOut={(data as { query_history_timed_out?: boolean }).query_history_timed_out === true} />}
 
             {/* Pagination */}
             {data.pages > 1 && (

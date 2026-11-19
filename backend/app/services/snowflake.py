@@ -56,6 +56,22 @@ _NOT_AUTHORIZED_ERRNO = 2003
 # ACCOUNT_USAGE checks, so one slow view on a big account skips that check
 # instead of failing the page.
 _TIMEOUT_ERRNOS = {604, 630}
+# 090073: the warehouse's resource monitor quota is used up, so it cannot
+# resume. Every query fails until the quota resets or is raised.
+_MONITOR_QUOTA_ERRNO = 90073
+
+
+def _raise_if_monitor_quota(e) -> None:
+    if getattr(e, "errno", None) == _MONITOR_QUOTA_ERRNO or "resource monitor" in str(e).lower():
+        from app.services.connectors.errors import QuotaExceededError
+        raise QuotaExceededError(
+            platform="snowflake",
+            vendor_code="090073",
+            vendor_message=str(e).split(": ", 1)[-1],
+            remediation_hint=("The warehouse this app uses hit its resource monitor's credit quota. "
+                              "Raise the monitor's CREDIT_QUOTA or wait for it to reset; until then "
+                              "no data can be refreshed."),
+        ) from e
 
 
 class _NullRow(tuple):
@@ -87,6 +103,7 @@ class _TolerantCursor:
         try:
             return self._cur.execute(sql, *args, **kwargs)
         except snowflake.connector.errors.ProgrammingError as e:
+            _raise_if_monitor_quota(e)
             # Only tolerate read-only metadata queries. Snowflake returns the
             # same errno for writes (e.g. ALTER WAREHOUSE) — those must raise.
             head = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
@@ -409,7 +426,7 @@ def sync_dashboard(conn_doc: dict, days: int, credit_price: float) -> dict:
         "storage_cost": storage_cost,
         "total_credits": round(sum(d["credits"] for d in cost_trend), 2),
         "active_warehouses": len(all_wh),
-        "query_history_available": not qh_unavailable,
+        **history_flags(sf),
         # query_attribution counts only warehouse queries over ~100ms
         "queries_source": queries_source,
         "expensive_queries": expensive_queries,
@@ -484,10 +501,17 @@ def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
                    QUERY_TYPE, ROLE_NAME
             FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
             WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-            AND EXECUTION_STATUS = 'SUCCESS'
-            AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+            AND QUERY_ID IN (
+                -- Rank on two narrow columns first; reading QUERY_TEXT and
+                -- 20 other columns for millions of rows is what timed out.
+                SELECT QUERY_ID FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+                WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
+                AND EXECUTION_STATUS = 'SUCCESS'
+                AND IS_CLIENT_GENERATED_STATEMENT = FALSE
+                ORDER BY TOTAL_ELAPSED_TIME DESC
+                LIMIT {limit} OFFSET {offset}
+            )
             ORDER BY TOTAL_ELAPSED_TIME DESC
-            LIMIT {limit} OFFSET {offset}
         """)
         data = [
             {
@@ -516,6 +540,10 @@ def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
             }
             for r in cur.fetchall()
         ]
+        if data:
+            types = classify_users(cur, conn_doc, sorted({q["user"] for q in data if q["user"]}))
+            for q in data:
+                q["user_type"], q["user_type_source"] = types.get(q["user"], ("human", "guess"))
     qh_unavailable = view_unavailable(sf, "QUERY_HISTORY")
     return {
         "data": data,
@@ -524,7 +552,7 @@ def sync_queries(conn_doc: dict, days: int, page: int, limit: int) -> dict:
         "pages": max(1, math.ceil(total / limit)),
         "limit": limit,
         "days": days,
-        "query_history_available": not qh_unavailable,
+        **history_flags(sf),
     }
 
 
@@ -782,7 +810,7 @@ def sync_workloads(conn_doc: dict, days: int) -> dict:
     qh_unavailable = view_unavailable(sf, "QUERY_HISTORY")
     sf.close()
     return {
-        "query_history_available": not qh_unavailable,
+        **history_flags(sf),
         "workloads": workloads,
         "total_workloads": len(workloads),
         "total_executions": sum(w["execution_count"] for w in workloads),
@@ -826,16 +854,25 @@ def sync_recommendations(conn_doc: dict, credit_price: float) -> list:
         if r.get("ddl_command"):
             desc += "Run the SQL below in Snowsight as the warehouse owner. It takes effect immediately and can be reverted the same way."
         elif not sql:
-            desc += ("It already suspends within about a minute, so the idle comes from Snowflake "
-                     "billing at least 60 seconds per start, times thousands of starts. Running the "
-                     "callers less often or in batches will cut it.")
+            cur_s = r.get("current_suspend_s")
+            if cur_s is not None and 0 < cur_s <= 60:
+                desc += (f"Auto-suspend is already {cur_s}s, so the idle comes from Snowflake billing at "
+                         "least 60 seconds per start, times many starts. Running the callers less often, "
+                         "in batches, or on a shared warehouse will cut it.")
+            elif cur_s is None:
+                desc += ("The auto-suspend setting is not visible to this role (grant MONITOR on the "
+                         "warehouse), so no change is suggested yet.")
+            else:
+                desc += (f"Auto-suspend is {cur_s}s. Replaying its query gaps shows a lower setting "
+                         "would save under $5/month, so the idle comes from how often it is called.")
         recs.append({
             "id": f"rec_idle_{name}",
             "title": f"{name} is idle {r['idle_pct']:.0f}% of its runtime (~${r['idle_cost_monthly']:,.0f}/mo)",
             "description": desc,
             "category": "warehouse",
             "potential_savings": savings,
-            "effort": "low",
+            # A settings change is low effort; changing how callers behave is not.
+            "effort": "low" if sql else "medium",
             "priority": "high" if r["idle_cost_monthly"] >= 300 else "medium",
             # SQL only when the current setting is known, so every line in
             # the action plan has a real revert. Estimates show it as text.
@@ -901,19 +938,29 @@ def sync_recommendations(conn_doc: dict, credit_price: float) -> list:
     if repeated:
         total_runs = sum(int(r[1]) for r in repeated)
         top = repeated[0]
+        total_s = float(top[2] or 0)
+        sample = str(top[3] or "")
+        metadata = "INFORMATION_SCHEMA" in sample.upper() or "SHOW " in sample.upper()[:10]
+        if metadata:
+            fix = ("Metadata queries (INFORMATION_SCHEMA) never use the result cache, so the fix is in "
+                   "the caller: check less often, or cache the answer in the tool that sends it.")
+        else:
+            fix = ("Snowflake's result cache (on by default, USE_CACHED_RESULT) only serves a repeat when "
+                   "the text is identical and the data has not changed, so a repeat that still runs usually "
+                   "means changing data or a non-deterministic function. Check whether the caller needs "
+                   "it this often.")
         recs.append({
             "id": "rec_repeated_queries",
-            "title": f"{total_runs} repeated SELECT queries detected - enable result caching",
+            "title": f"The same query ran {int(top[1]):,} times in 7 days on {top[0]}",
             "description": (
-                f"Top repeated query ran {int(top[1])}x in the last 7 days on {top[2]} "
-                f"({round(float(top[2] or 0), 0):.0f}s total compute). "
-                f"Sample: \"{(str(top[3]) or '')[:120]}...\". "
-                f"Run ALTER WAREHOUSE {top[0]} SET USE_CACHED_RESULT = TRUE to serve identical queries from cache at zero compute cost."
+                f"Top repeated query ran {int(top[1]):,}x on {top[0]} ({total_s:,.0f}s total elapsed); "
+                f"the top {len(repeated)} repeated queries ran {total_runs:,} times. "
+                f"Sample: \"{sample[:120]}...\". {fix}"
             ),
             "category": "query",
             "potential_savings": None,
-            "effort": "low",
-            "priority": "high" if total_runs >= 50 else "medium",
+            "effort": "medium",
+            "priority": "high" if total_s >= 3600 else "medium",
         })
 
     # 3. Full table scans
@@ -1188,17 +1235,39 @@ def sync_warehouse_sizing(conn_doc: dict, days: int, credit_price: float) -> dic
     """)
     utilization = {r[0]: round(float(r[1] or 0), 3) for r in cur.fetchall()}
 
-    # Get spillage per warehouse
+    # Queue, spill and runtime per warehouse, from QUERY_HISTORY.
     cur.execute(f"""
         SELECT WAREHOUSE_NAME,
-               ROUND(SUM(BYTES_SPILLED_TO_LOCAL_STORAGE) / 1073741824.0, 2) AS spill_local_gb,
-               ROUND(SUM(BYTES_SPILLED_TO_REMOTE_STORAGE) / 1073741824.0, 2) AS spill_remote_gb
+               COUNT(*),
+               COUNT_IF(QUEUED_OVERLOAD_TIME > 0),
+               SUM(QUEUED_OVERLOAD_TIME) / 1000,
+               APPROX_PERCENTILE(IFF(QUEUED_OVERLOAD_TIME > 0, QUEUED_OVERLOAD_TIME, NULL), 0.95) / 1000,
+               COUNT_IF(QUEUED_PROVISIONING_TIME > 0),
+               SUM(QUEUED_PROVISIONING_TIME) / 1000,
+               COUNT_IF(BYTES_SPILLED_TO_LOCAL_STORAGE > 0),
+               COUNT_IF(BYTES_SPILLED_TO_REMOTE_STORAGE > 0),
+               SUM(BYTES_SPILLED_TO_LOCAL_STORAGE) / 1073741824.0,
+               SUM(BYTES_SPILLED_TO_REMOTE_STORAGE) / 1073741824.0,
+               SUM(IFF(BYTES_SPILLED_TO_LOCAL_STORAGE > 0 OR BYTES_SPILLED_TO_REMOTE_STORAGE > 0,
+                       EXECUTION_TIME, 0)) / 1000,
+               SUM(EXECUTION_TIME) / 1000,
+               APPROX_PERCENTILE(TOTAL_ELAPSED_TIME, 0.95) / 1000
         FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
         WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
-          AND WAREHOUSE_NAME IS NOT NULL
+          AND WAREHOUSE_NAME IS NOT NULL AND WAREHOUSE_SIZE IS NOT NULL
         GROUP BY 1
     """)
-    spillage = {r[0]: {"local": float(r[1] or 0), "remote": float(r[2] or 0)} for r in cur.fetchall()}
+    health = {}
+    for r in cur.fetchall():
+        f = [float(v or 0) for v in r[1:]]
+        health[r[0]] = {
+            "queries": int(f[0]),
+            "queued_queries": int(f[1]), "queued_s": f[2], "queue_p95_s": f[3],
+            "provisioning_queries": int(f[4]), "provisioning_s": f[5],
+            "spill_local_queries": int(f[6]), "spill_remote_queries": int(f[7]),
+            "spill_local_gb": f[8], "spill_remote_gb": f[9],
+            "spill_exec_s": f[10], "exec_s": f[11], "p95_elapsed_s": f[12],
+        }
 
     # Get credits per warehouse
     cur.execute(f"""
@@ -1209,81 +1278,189 @@ def sync_warehouse_sizing(conn_doc: dict, days: int, credit_price: float) -> dic
         GROUP BY 1
     """)
     credits = {r[0]: float(r[1] or 0) for r in cur.fetchall()}
-    # Spill comes from QUERY_HISTORY. Without it a "downsize" call would rest
-    # on concurrency alone, which says nothing about whether queries need the
-    # memory, so we only list sizes and make no recommendation.
-    have_spill = not view_unavailable(sf, "QUERY_HISTORY")
+    # Spill and queue come from QUERY_HISTORY. Without it a "downsize" call
+    # would rest on load alone, which says nothing about whether queries need
+    # the memory, so we only list sizes and make no recommendation.
+    have_history = not view_unavailable(sf, "QUERY_HISTORY")
+    flags = history_flags(sf)
     sf.close()
     wh_configs = {k: v for k, v in wh_configs.items() if credits.get(k, 0) > 0}
 
     size_order = ["XSMALL", "SMALL", "MEDIUM", "LARGE", "XLARGE", "2XLARGE", "3XLARGE", "4XLARGE", "5XLARGE", "6XLARGE"]
-    size_credits = {"XSMALL": 1, "SMALL": 2, "MEDIUM": 4, "LARGE": 8, "XLARGE": 16, "2XLARGE": 32, "3XLARGE": 64, "4XLARGE": 128, "5XLARGE": 256, "6XLARGE": 512}
+    display = {"XSMALL": "X-Small", "SMALL": "Small", "MEDIUM": "Medium", "LARGE": "Large", "XLARGE": "X-Large",
+               "2XLARGE": "2X-Large", "3XLARGE": "3X-Large", "4XLARGE": "4X-Large", "5XLARGE": "5X-Large",
+               "6XLARGE": "6X-Large"}
 
     def normalize_size(s):
         return s.replace("X-", "X").replace("-", "").upper()
 
     recommendations = []
     total_savings = 0.0
+    month = 30 / max(days, 1)
 
     for wh_name, current_size_raw in wh_configs.items():
         current_size = normalize_size(current_size_raw)
-        util = utilization.get(wh_name, 0.0)
-        spill = spillage.get(wh_name, {"local": 0, "remote": 0})
-        wh_credits = credits.get(wh_name, 0)
-
-        current_idx = size_order.index(current_size) if current_size in size_order else -1
-        if current_idx < 0:
+        if current_size not in size_order:
             continue
+        idx = size_order.index(current_size)
+        util = utilization.get(wh_name, 0.0)
+        h = health.get(wh_name) or {}
+        monthly_cost = credits.get(wh_name, 0) * month * credit_price
+        findings = assess_warehouse_health(h, util, have_history, can_downsize=idx > 0)
+        verdict = findings[0]["kind"] if findings else "healthy"
 
-        recommended_size = current_size
-        reason = "Current sizing appears appropriate"
+        recommended = current_size
         needs_change = False
-
-        if not have_spill:
-            reason = "Not evaluated: spill and query times need QUERY_HISTORY (GOVERNANCE_VIEWER)"
-        elif util < 0.2 and spill["remote"] == 0 and spill["local"] == 0 and current_idx > 0:
-            recommended_size = size_order[current_idx - 1]
-            reason = f"Average utilization is {util:.0%} with no remote spillage — warehouse is over-provisioned"
+        upper_savings = None
+        if verdict == "too_small" and idx < len(size_order) - 1:
+            recommended = size_order[idx + 1]
             needs_change = True
-        elif spill["remote"] > 1.0 and current_idx < len(size_order) - 1:
-            recommended_size = size_order[current_idx + 1]
-            reason = f"Remote spillage of {spill['remote']:.1f} GB detected — warehouse is undersized for workload"
+        elif verdict == "oversized" and idx > 0:
+            recommended = size_order[idx - 1]
             needs_change = True
+            # Half the size halves the hourly rate; queries that use the
+            # parallelism will run longer, so this is a ceiling, not a promise.
+            upper_savings = round(monthly_cost / 2, 2)
 
-        current_cph = size_credits.get(current_size, 1)
-        recommended_cph = size_credits.get(recommended_size, 1)
-        monthly_credits = wh_credits * (30 / max(days, 1))
-        ratio = recommended_cph / current_cph if current_cph > 0 else 1
-        monthly_savings = round((1 - ratio) * monthly_credits * credit_price, 2) if needs_change else 0.0
-        total_savings += max(monthly_savings, 0)
-
-        display_size_map = {"XSMALL": "X-Small", "SMALL": "Small", "MEDIUM": "Medium", "LARGE": "Large", "XLARGE": "X-Large", "2XLARGE": "2X-Large", "3XLARGE": "3X-Large", "4XLARGE": "4X-Large"}
-
+        queries = h.get("queries") or 0
+        exec_s = h.get("exec_s") or 0
         recommendations.append({
             "warehouse": wh_name,
-            "current_size": display_size_map.get(current_size, current_size_raw),
-            "recommended_size": display_size_map.get(recommended_size, recommended_size),
+            "current_size": display.get(current_size, current_size_raw),
+            "recommended_size": display.get(recommended, recommended),
             "avg_utilization": util,
-            "spill_local_gb": spill["local"],
-            "spill_remote_gb": spill["remote"],
-            "monthly_savings": max(monthly_savings, 0),
-            "ddl_command": f"ALTER WAREHOUSE {wh_name} SET WAREHOUSE_SIZE = '{display_size_map.get(recommended_size, recommended_size)}';" if needs_change else None,
-            "reason": reason,
+            "monthly_cost": round(monthly_cost, 2),
+            "queries": queries,
+            "queued_queries": h.get("queued_queries", 0),
+            "queued_pct": round(100 * h.get("queued_queries", 0) / queries, 2) if queries else 0.0,
+            "queued_hours": round(h.get("queued_s", 0) / 3600, 2),
+            "queue_p95_s": round(h.get("queue_p95_s", 0), 1),
+            "provisioning_queries": h.get("provisioning_queries", 0),
+            "provisioning_hours": round(h.get("provisioning_s", 0) / 3600, 2),
+            "spill_local_gb": round(h.get("spill_local_gb", 0), 2),
+            "spill_remote_gb": round(h.get("spill_remote_gb", 0), 2),
+            "spill_local_queries": h.get("spill_local_queries", 0),
+            "spill_remote_queries": h.get("spill_remote_queries", 0),
+            "spill_query_pct": round(100 * max(h.get("spill_local_queries", 0), h.get("spill_remote_queries", 0)) / queries, 2) if queries else 0.0,
+            "spill_time_pct": round(100 * h.get("spill_exec_s", 0) / exec_s, 1) if exec_s else 0.0,
+            "p95_elapsed_s": round(h.get("p95_elapsed_s", 0), 1),
+            "verdict": verdict,
+            # The warehouse this app queries with; its own queue/spill comes
+            # from the app's metadata queries, not the user's workloads.
+            "is_app_warehouse": wh_name.upper() == str(conn_doc.get("warehouse") or "").upper(),
+            "findings": findings,
+            # Size changes are never "free money": a size up costs 2x per
+            # hour, a size down can slow queries. No headline saving.
+            "monthly_savings": 0.0,
+            "savings_upper_bound": upper_savings,
+            "ddl_command": f"ALTER WAREHOUSE {quote_ident(wh_name)} SET WAREHOUSE_SIZE = '{display.get(recommended, recommended).replace('-', '').upper()}';" if needs_change else None,
+            "reason": findings[0]["title"] if findings else "Healthy: no queueing, no spill, no slow-query pattern",
             "needs_change": needs_change,
         })
 
-    return {"recommendations": recommendations, "total_monthly_savings": round(total_savings, 2), "days": days}
+    order = {"too_small": 0, "busy": 1, "memory": 2, "cold_starts": 3, "oversized": 4, "unknown": 5, "healthy": 6}
+    recommendations.sort(key=lambda r: (order.get(r["verdict"], 9), -r["monthly_cost"]))
+    return {"recommendations": recommendations, "total_monthly_savings": round(total_savings, 2),
+            "days": days, **flags}
+
+
+# Thresholds for the warehouse health check. Generic, documented in
+# docs/connectors/snowflake.md.
+REMOTE_SPILL_GB = 1.0          # any real remote spill is worth acting on
+LOCAL_SPILL_TIME_PCT = 10.0    # share of query time in queries that spill locally
+QUEUE_PCT = 1.0                # share of queries that waited for capacity
+QUEUE_P95_S = 10.0             # ...or the slowest 5% of waits
+COLD_START_HOURS = 1.0         # total time queries waited for a warehouse to start
+OVERSIZED_LOAD = 0.2           # average running queries per cluster
+
+
+def assess_warehouse_health(h: dict, util: float, have_history: bool, can_downsize: bool = True) -> list[dict]:
+    """Plain-language findings for one warehouse, most important first.
+
+    kinds: too_small (remote spill), busy (queue), memory (local spill),
+    cold_starts (provisioning wait), oversized (low load, no pressure)."""
+    if not have_history:
+        return [{"kind": "unknown", "severity": "info",
+                 "title": "Not evaluated: queue and spill need QUERY_HISTORY (GOVERNANCE_VIEWER)",
+                 "detail": "Without per-query history there is no way to tell whether queries wait or run out of memory."}]
+    if not h:
+        return []
+    out = []
+    q = h.get("queries") or 0
+    if h.get("spill_remote_gb", 0) >= REMOTE_SPILL_GB:
+        out.append({
+            "kind": "too_small", "severity": "high",
+            "title": f"Out of memory: {h['spill_remote_gb']:,.1f} GB spilled to remote storage",
+            "detail": (f"{h['spill_remote_queries']:,} queries ran out of memory AND local disk, and wrote to "
+                       "remote storage, which is many times slower. One size up doubles memory and the hourly "
+                       "rate; spilling queries often finish more than twice as fast, so cost can stay flat. "
+                       "Try it on those queries first, or fix them (filter earlier, avoid huge sorts/joins)."),
+        })
+    queued_pct = 100 * h.get("queued_queries", 0) / q if q else 0
+    if queued_pct >= QUEUE_PCT or h.get("queue_p95_s", 0) >= QUEUE_P95_S and h.get("queued_queries", 0) >= 10:
+        out.append({
+            "kind": "busy", "severity": "medium",
+            "title": (f"Busy: {queued_pct:.1f}% of queries waited for capacity "
+                      f"({h['queued_s'] / 3600:,.1f} h total, slowest 5% waited {h['queue_p95_s']:,.0f}s)"),
+            "detail": ("Queries queue when the warehouse is already running as many as it can. More clusters "
+                       "(MAX_CLUSTER_COUNT, Enterprise edition) or moving a workload to its own warehouse fixes "
+                       "waiting without making each query cost more. A bigger size only helps if the queries "
+                       "themselves are slow."),
+        })
+    spill_time_pct = 100 * h.get("spill_exec_s", 0) / h["exec_s"] if h.get("exec_s") else 0
+    if h.get("spill_local_queries", 0) and spill_time_pct >= LOCAL_SPILL_TIME_PCT and not any(f["kind"] == "too_small" for f in out):
+        out.append({
+            "kind": "memory", "severity": "medium",
+            "title": (f"Memory pressure: {spill_time_pct:.0f}% of query time is in queries that spill to local disk "
+                      f"({h['spill_local_gb']:,.0f} GB, {h['spill_local_queries']:,} queries)"),
+            "detail": ("Local spill means a query ran out of memory and used the warehouse's SSD. It still works, "
+                       "but slower. Small amounts are normal. When it is a large share of the time, the heavy "
+                       "queries may run cheaper on one size up (they finish faster), or on their own warehouse."),
+        })
+    if h.get("provisioning_s", 0) / 3600 >= COLD_START_HOURS:
+        out.append({
+            "kind": "cold_starts", "severity": "low",
+            "title": (f"Cold starts: queries waited {h['provisioning_s'] / 3600:,.1f} h in total for the warehouse "
+                      f"to start ({h['provisioning_queries']:,} queries)"),
+            "detail": ("This is time spent waiting for a suspended warehouse (or a new cluster) to come up. It is "
+                       "normal with short auto-suspend. Only worth changing if users notice the delay."),
+        })
+    # X-Small is the floor: nothing to size down to.
+    if not out and can_downsize and util < OVERSIZED_LOAD and h.get("queued_queries", 0) == 0:
+        out.append({
+            "kind": "oversized", "severity": "low",
+            "title": f"Possibly oversized: average load {util:.2f}, no queueing, no spill",
+            "detail": ("Nothing here needs the current size. One size down halves the hourly rate; queries that "
+                       "use the extra parallelism will take longer, so test with real workloads before keeping it."),
+        })
+    return out
 
 
 # Name fragments that mark a Snowflake user as a service / integration
 # account when Snowflake's own USERS.TYPE is not readable. Generic: common
 # naming conventions plus widely used data tools.
-_SERVICE_NAME_HINTS = (
-    "_USER", "_SVC", "SVC_", "SERVICE", "_BOT", "_ETL", "_APP", "_API", "_INTEGRATION", "SYSTEM",
-    "DBT", "AIRBYTE", "FIVETRAN", "STITCH", "HIGHTOUCH", "CENSUS", "SEGMENT", "RUDDERSTACK",
-    "LOOKER", "TABLEAU", "OMNI", "SIGMA", "MODE_", "METABASE", "HEX", "POWERBI", "THOUGHTSPOT",
-    "AIRFLOW", "DAGSTER", "PREFECT", "MATILLION", "MONTE_CARLO", "SELECT_", "SNOWPIPE", "WORKSHEETS_APP",
+#
+# Matched against whole name parts (split on anything not a letter), so a
+# person called DOMINIC is not "OMNI" and ALEXHEXTON is not "HEX". Long,
+# distinctive tool names also match inside a word (DBTCLOUD, FIVETRANLOADER).
+_SERVICE_NAME_TOKENS = frozenset({
+    "USER", "SVC", "SERVICE", "SERVICES", "BOT", "ETL", "ELT", "APP", "API", "INTEGRATION",
+    "SYSTEM", "LOADER", "PIPELINE", "SYNC", "INGEST", "READER", "WRITER", "AUTOMATION",
+    "DBT", "STITCH", "CENSUS", "SEGMENT", "LOOKER", "OMNI", "SIGMA", "MODE", "HEX",
+    "PREFECT", "SELECT", "WORKSHEETS",
+})
+_SERVICE_NAME_SUBSTRINGS = (
+    "AIRBYTE", "FIVETRAN", "HIGHTOUCH", "RUDDERSTACK", "TABLEAU", "METABASE", "POWERBI",
+    "THOUGHTSPOT", "AIRFLOW", "DAGSTER", "MATILLION", "MONTECARLO", "SNOWPIPE", "DBTCLOUD",
 )
+
+
+def looks_like_service_account(name: str) -> bool:
+    """Name-only guess, used when neither the user nor Snowflake says."""
+    key = str(name or "").upper()
+    tokens = set(re.split(r"[^A-Z]+", key)) - {""}
+    flat = re.sub(r"[^A-Z]", "", key)
+    return bool(tokens & _SERVICE_NAME_TOKENS) or any(s in flat for s in _SERVICE_NAME_SUBSTRINGS)
 
 
 def classify_users(cur, conn_doc: dict, names: list) -> dict:
@@ -1314,7 +1491,7 @@ def classify_users(cur, conn_doc: dict, names: list) -> dict:
             if str(utype or "").upper() == "PERSON" or "@" in str(login or "") or email:
                 out[n] = ("human", "snowflake")
                 continue
-        out[n] = (("service" if any(h in key for h in _SERVICE_NAME_HINTS) else "human"), "guess")
+        out[n] = (("service" if looks_like_service_account(n) else "human"), "guess")
     return out
 
 
@@ -1323,6 +1500,16 @@ def view_unavailable(sf, view: str) -> bool:
     Either way the data is missing, and checks must not treat it as empty."""
     names = set(getattr(sf, "missing_views", ())) | set(getattr(sf, "timed_out_views", ()))
     return any(view.upper() in v.upper() for v in names)
+
+
+def history_flags(sf, view: str = "QUERY_HISTORY") -> dict:
+    """API flags for a view: denied (needs a grant) is not the same as timed
+    out (Snowflake was too slow for this range), and the UI says which."""
+    def hit(names):
+        return any(view.upper() in v.upper() for v in names)
+    denied = hit(getattr(sf, "missing_views", ()))
+    timed_out = hit(getattr(sf, "timed_out_views", ()))
+    return {"query_history_available": not denied, "query_history_timed_out": timed_out and not denied}
 
 
 def quote_ident(name: str) -> str:
@@ -1407,21 +1594,33 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
     # resumes (fall back to warehouse resumes on accounts that lack them).
     resumes = {r[0]: int(r[1] or r[2] or 0) for r in cur.fetchall()}
 
-    # Idle seconds a given auto-suspend would bill, replayed over the real
-    # gaps between queries: a gap shorter than the setting keeps the
-    # warehouse running for the whole gap; a longer gap bills the setting,
-    # then the warehouse sleeps. (Ignores the 60s minimum on restarts, which
-    # is why 60s is the floor we ever recommend.)
+    # Seconds a given auto-suspend would bill beyond query time, replayed
+    # over the real gaps between queries. A gap shorter than the setting keeps
+    # the warehouse running for the whole gap; a longer gap bills the setting,
+    # then the warehouse sleeps, and the next query pays a restart: Snowflake
+    # bills at least 60s per start, so a short query after a restart adds
+    # (60s - its runtime). Gaps are measured from the latest end of ANY
+    # earlier query (not just the previous one), so overlapping queries do not
+    # produce fake gaps.
     candidates = SUSPEND_CANDIDATES
-    idle_cols = ",\n               ".join(f"SUM(LEAST(gap_s, {c}))" for c in candidates)
+    idle_cols = ",\n               ".join(
+        f"SUM(LEAST(gap_s, {c})) + SUM(IFF(gap_s > {c}, GREATEST(60 - dur_s, 0), 0))"
+        for c in candidates
+    )
+    restart_cols = ",\n               ".join(f"COUNT_IF(gap_s > {c})" for c in candidates)
     cur.execute(f"""
         SELECT WAREHOUSE_NAME,
                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY gap_s),
                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY gap_s),
-               {idle_cols}
+               {idle_cols},
+               {restart_cols}
         FROM (
             SELECT WAREHOUSE_NAME,
-                   DATEDIFF('second', LAG(END_TIME) OVER (PARTITION BY WAREHOUSE_NAME ORDER BY END_TIME), START_TIME) AS gap_s
+                   DATEDIFF('millisecond',
+                            MAX(END_TIME) OVER (PARTITION BY WAREHOUSE_NAME ORDER BY START_TIME, END_TIME
+                                                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+                            START_TIME) / 1000 AS gap_s,
+                   DATEDIFF('millisecond', START_TIME, END_TIME) / 1000 AS dur_s
             FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
             WHERE START_TIME >= DATEADD('day', -{days}, CURRENT_TIMESTAMP())
               AND WAREHOUSE_NAME IS NOT NULL AND WAREHOUSE_SIZE IS NOT NULL
@@ -1431,9 +1630,12 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
     """)
     gaps = {}
     idle_at: dict = {}
+    restarts_at: dict = {}
+    n = len(candidates)
     for r in cur.fetchall():
         gaps[r[0]] = (round(float(r[1] or 0)), round(float(r[2] or 0)))
-        idle_at[r[0]] = {c: float(v or 0) for c, v in zip(candidates, r[3:])}
+        idle_at[r[0]] = {c: float(v or 0) for c, v in zip(candidates, r[3:3 + n])}
+        restarts_at[r[0]] = {c: int(v or 0) for c, v in zip(candidates, r[3 + n:3 + 2 * n])}
     missing = sorted(getattr(sf, "missing_views", set()))
     sf.close()
 
@@ -1452,6 +1654,8 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
         recommended = None
         needs_change = False
         monthly_savings = 0.0
+        extra_restarts = None
+        replay_coverage = None
         never = current == 0
         if current and p75 and wh in idle_at and cfg["size"]:
             # Replay the real query gaps at the current setting and at 60s.
@@ -1461,7 +1665,12 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
             if base and base > 60:
                 saved_s = idle_at[wh][base] - idle_at[wh][60]
                 saved = saved_s / 3600 * size_credits.get(cfg["size"], 1) * month
-                monthly_savings = round(min(saved * credit_price, idle_cost_monthly), 2)
+                monthly_savings = round(min(max(saved, 0) * credit_price, idle_cost_monthly), 2)
+                extra_restarts = round((restarts_at[wh][60] - restarts_at[wh][base]) * month)
+                # How much of the metered idle the replay explains. Low
+                # coverage means multi-cluster or other idle the gaps miss.
+                replay_idle = idle_at[wh][base] / 3600 * size_credits.get(cfg["size"], 1)
+                replay_coverage = round(100 * replay_idle / idle, 0) if idle else None
                 if monthly_savings >= 5:
                     recommended = 60
                     needs_change = True
@@ -1513,9 +1722,12 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
                     "will save more than changing the setting; 60s is worth testing.")
             recommended = 60
         elif current and needs_change and p75:
-            note = (f"Replaying every gap between its queries over the last {days} days: auto-suspend "
-                    f"{current}s keeps it running through gaps that 60s would sleep through. "
-                    f"Half the gaps are under {p50}s, so short bursts still stay warm.")
+            note = (f"Replayed every gap between its queries over the last {days} days, counting the "
+                    f"60s minimum charge on each restart. 60s adds ~{extra_restarts:,} restarts a month "
+                    f"(cold cache, ~1s resume each). Half the gaps are under {max(p50, 1)}s.")
+            if replay_coverage is not None and replay_coverage < 75:
+                note += (f" The replay explains only {replay_coverage:.0f}% of this warehouse's idle "
+                         "(multi-cluster or concurrent load), so treat the saving as a rough guide.")
         elif current and needs_change and not p75:
             note = (f"Each of {n_res:,} cluster starts runs {current}s after its last query. "
                     f"60s would cut ~{current - 60}s per start.")
@@ -1547,6 +1759,8 @@ def sync_autosuspend_analysis(conn_doc: dict, days: int, credit_price: float) ->
             "suggested_sql": f"ALTER WAREHOUSE {quote_ident(wh)} SET AUTO_SUSPEND = {recommended};" if (needs_change or low_suspend) else None,
             "gap_p50_s": p50,
             "gap_p75_s": p75,
+            "extra_restarts_monthly": extra_restarts,
+            "replay_coverage_pct": replay_coverage,
             "needs_change": needs_change,
             "note": note,
         })
@@ -1740,6 +1954,9 @@ def sync_cost_attribution(conn_doc: dict, days: int, credit_price: float) -> dic
         proportion = data["elapsed"] / total_elapsed_all if total_elapsed_all > 0 else 0
         cost = round(proportion * total_cost, 2)
         by_user.append({"user": user, "cost_usd": cost, "query_count": data["queries"], "pct": round(proportion * 100, 1)})
+    types = classify_users(cur, conn_doc, [u["user"] for u in by_user])
+    for u in by_user:
+        u["type"], u["type_source"] = types.get(u["user"], ("human", "guess"))
 
     # By role
     cur.execute(f"""

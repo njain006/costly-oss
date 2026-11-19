@@ -1,7 +1,24 @@
 // Empty-table message for Snowflake pages that read QUERY_HISTORY.
 // `denied` comes from the API: true only when the role could not read the
-// view. Otherwise the range is simply empty and we say so.
-export default function AccessHint({ what = "query history", denied }: { what?: string; denied?: boolean }) {
+// view. `timedOut` means Snowflake was too slow for this range, which is
+// not a permissions problem. Otherwise the range is simply empty.
+export default function AccessHint({
+  what = "query history",
+  denied,
+  timedOut,
+}: {
+  what?: string;
+  denied?: boolean;
+  timedOut?: boolean;
+}) {
+  if (timedOut && !denied) {
+    return (
+      <div className="py-10 text-center text-sm text-muted-foreground">
+        <p className="font-medium text-slate-600">Snowflake took too long to return {what} for this range.</p>
+        <p className="mt-1">Pick a shorter range, or press Refresh to try again.</p>
+      </div>
+    );
+  }
   if (!denied) {
     return (
       <div className="py-10 text-center text-sm text-muted-foreground">

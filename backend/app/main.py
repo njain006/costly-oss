@@ -27,7 +27,7 @@ _redis_lock_client = None
 def _get_redis_for_lock():
     global _redis_lock_client
     if _redis_lock_client is None:
-        _redis_lock_client = sync_redis.from_url("redis://redis:6379", decode_responses=True)
+        _redis_lock_client = sync_redis.from_url(settings.redis_url, decode_responses=True)
     return _redis_lock_client
 
 
@@ -136,8 +136,10 @@ app.include_router(optimization.router)
 app.include_router(admin.router)
 app.include_router(public_demo.router)
 app.include_router(chat.router)
-app.include_router(platform_views.router)
+# platforms first: platform_views' catch-all /{platform_key}/{view_slug}
+# would otherwise answer /{connection_id}/pricing and friends with demo data.
 app.include_router(platforms.router)
+app.include_router(platform_views.router)
 app.include_router(anomalies.router)
 app.include_router(teams.router)
 app.include_router(settings_router.router)
@@ -169,12 +171,14 @@ async def startup_event():
         id="platform_cost_boot",
     )
     # Precompute Snowflake pages so they open instantly (services/prewarm.py)
-    _scheduler.add_job(_locked_prewarm, "interval", hours=3, id="snowflake_prewarm")
-    _scheduler.add_job(
-        _locked_prewarm, "date",
-        run_date=datetime.utcnow() + timedelta(seconds=30),
-        id="snowflake_prewarm_boot",
-    )
+    if settings.prewarm_interval_hours > 0:
+        _scheduler.add_job(_locked_prewarm, "interval", hours=settings.prewarm_interval_hours,
+                           id="snowflake_prewarm")
+        _scheduler.add_job(
+            _locked_prewarm, "date",
+            run_date=datetime.utcnow() + timedelta(seconds=30),
+            id="snowflake_prewarm_boot",
+        )
     _scheduler.add_job(
         _locked_cost_digest, "cron",
         hour=9, minute=0, id="daily_cost_digest",

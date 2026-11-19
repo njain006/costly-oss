@@ -50,8 +50,9 @@ def _pull_query_history_from_sf(conn_doc: dict, since_iso: str, limit: int = 100
 
 
 async def sync_query_history_to_mongo(user_id: str, conn_doc: dict, days: int = 3) -> int:
+    connection_id = str(conn_doc.get("connection_id") or conn_doc.get("_id", ""))
     latest = await db.query_history.find_one(
-        {"user_id": user_id},
+        {"user_id": user_id, "connection_id": connection_id},
         sort=[("end_time", DESCENDING)],
     )
     if latest and latest.get("end_time"):
@@ -70,7 +71,7 @@ async def sync_query_history_to_mongo(user_id: str, conn_doc: dict, days: int = 
     for rd in rows:
         docs.append({
             "user_id": user_id,
-            "connection_id": str(conn_doc.get("_id", "")),
+            "connection_id": connection_id,
             "query_id": rd.get("query_id"),
             "start_time": rd.get("start_time"),
             "end_time": rd.get("end_time"),
@@ -127,8 +128,8 @@ async def sync_query_history_to_mongo(user_id: str, conn_doc: dict, days: int = 
 async def sync_all_users_query_history():
     print(f"[QH SYNC] Starting incremental sync at {datetime.utcnow().isoformat()}")
     try:
-        active_conns = await db.snowflake_connections.find({"is_active": True}).to_list(1000)
-        for conn_doc in active_conns:
+        from app.deps import all_snowflake_sources
+        for conn_doc in await all_snowflake_sources():
             user_id = conn_doc["user_id"]
             try:
                 count = await sync_query_history_to_mongo(user_id, conn_doc, days=2)

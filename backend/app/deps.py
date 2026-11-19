@@ -29,9 +29,22 @@ async def get_current_admin_user(user_id: str = Depends(get_current_user)):
     return user_id
 
 
-async def get_data_source(user_id: str):
+async def get_data_source(user_id: str, connection_id: str | None = None):
     """Find a Snowflake connection — checks unified platform_connections first,
-    then falls back to legacy snowflake_connections for backward compat."""
+    then falls back to legacy snowflake_connections for backward compat.
+
+    With `connection_id`, return that account (404 if it is not the user's).
+    Without it, the most recently synced account."""
+    if connection_id:
+        from bson import ObjectId
+        try:
+            oid = ObjectId(connection_id)
+        except Exception:
+            raise HTTPException(404, "Snowflake connection not found")
+        pc = await db.platform_connections.find_one({"_id": oid, "user_id": user_id, "platform": "snowflake"})
+        if not pc:
+            raise HTTPException(404, "Snowflake connection not found")
+        return _platform_conn_to_sf_doc(pc)
 
     # Check unified system first
     pc = await db.platform_connections.find_one(
@@ -43,6 +56,28 @@ async def get_data_source(user_id: str):
 
     # Legacy fallback
     return await db.snowflake_connections.find_one({"user_id": user_id, "is_active": True})
+
+
+def cache_scope(user_id: str, source: dict | None) -> str:
+    """Cache-key prefix for one user's one Snowflake account."""
+    cid = (source or {}).get("connection_id") or str((source or {}).get("_id") or "default")
+    return f"{user_id}:{cid}"
+
+
+async def all_snowflake_sources() -> list[dict]:
+    """Every Snowflake account to run background jobs against: all
+    platform_connections, plus legacy snowflake_connections for users who
+    have no platform connection yet. Each doc carries user_id and
+    connection_id."""
+    out = []
+    users_with_platform = set()
+    async for pc in db.platform_connections.find({"platform": "snowflake"}):
+        out.append(_platform_conn_to_sf_doc(pc))
+        users_with_platform.add(pc.get("user_id"))
+    async for c in db.snowflake_connections.find({"is_active": True}):
+        if c.get("user_id") not in users_with_platform:
+            out.append({**c, "connection_id": str(c.get("_id", ""))})
+    return out
 
 
 def _platform_conn_to_sf_doc(pc: dict) -> dict:

@@ -12,8 +12,9 @@
 
 ```bash
 git clone https://github.com/njain006/costly-oss && cd costly-oss
-cp backend/.env.example backend/.env   # add your LLM API key
-docker compose up -d                    # open http://localhost:3000
+./scripts/setup.sh                      # creates backend/.env with fresh secrets
+docker compose up -d                    # open http://localhost:3000, sign up
+# optional: add an LLM API key to backend/.env for the AI agent
 ```
 
 ## What it does

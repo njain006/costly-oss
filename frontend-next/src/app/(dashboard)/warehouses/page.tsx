@@ -1,5 +1,7 @@
 "use client";
 
+import LoadError from "@/components/load-error";
+
 import { useState } from "react";
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
@@ -19,6 +21,7 @@ import { COLORS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/format";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { AlertTriangle, TrendingDown, DollarSign } from "lucide-react";
+import WarehouseHealth, { type WarehouseHealthData } from "@/components/warehouse-health";
 
 interface WarehouseInfo {
   name: string; size: string; state: string; auto_suspend: number;
@@ -33,18 +36,6 @@ interface WarehouseData {
   fetched_at?: string;
   cached?: boolean;
   demo?: boolean;
-}
-
-interface SizingRec {
-  warehouse: string; current_size: string; recommended_size: string;
-  avg_utilization: number; spill_local_gb: number; spill_remote_gb: number;
-  monthly_savings: number; ddl_command: string | null; reason: string; needs_change: boolean;
-}
-
-interface SizingData {
-  recommendations: SizingRec[];
-  total_monthly_savings: number;
-  fetched_at?: string; demo?: boolean;
 }
 
 interface AutoSuspendRec {
@@ -71,20 +62,20 @@ interface SpillageData {
 
 export default function WarehousesPage() {
   const { days, refreshTrigger } = useDateRange();
-  const { data, loading } = useApi<WarehouseData>(
-    `/warehouses?days=${days}&refresh=${refreshTrigger > 0}`,
+  const { data, loading, error: loadError } = useApi<WarehouseData>(
+    `/warehouses?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
-  const { data: sizingData } = useApi<SizingData>(
-    `/warehouses/sizing?days=${days}&refresh=${refreshTrigger > 0}`,
+  const { data: sizingData } = useApi<WarehouseHealthData>(
+    `/warehouses/sizing?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: suspendData } = useApi<AutoSuspendData>(
-    `/warehouses/autosuspend?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/warehouses/autosuspend?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: spillData } = useApi<SpillageData>(
-    `/spillage?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/spillage?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
 
@@ -122,13 +113,14 @@ export default function WarehousesPage() {
       </div>
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <Skeleton className="h-80 rounded-lg" />
       ) : data ? (
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="sizing">Right-Sizing</TabsTrigger>
+            <TabsTrigger value="sizing">Health: queue &amp; spill</TabsTrigger>
             <TabsTrigger value="autosuspend">Auto-Suspend</TabsTrigger>
             <TabsTrigger value="spillage">Spillage</TabsTrigger>
           </TabsList>
@@ -249,101 +241,16 @@ export default function WarehousesPage() {
           {/* Right-Sizing tab */}
           <TabsContent value="sizing">
             {sizingData ? (
-              <>
-                {sizingData.total_monthly_savings > 0 && (
-                  <Card className="mb-6 bg-emerald-50 border-emerald-200">
-                    <CardContent className="p-5 flex items-center gap-4">
-                      <div className="h-12 w-12 rounded-lg bg-emerald-100 flex items-center justify-center">
-                        <DollarSign className="h-6 w-6 text-emerald-600" />
-                      </div>
-                      <div>
-                        <div className="text-sm text-emerald-700">Potential Monthly Savings from Right-Sizing</div>
-                        <div className="text-3xl font-bold text-emerald-800">{formatCurrency(sizingData.total_monthly_savings)}</div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Warehouse Right-Sizing Recommendations</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Warehouse</TableHead>
-                          <TableHead>Current</TableHead>
-                          <TableHead>Recommended</TableHead>
-                          <TableHead>Utilization</TableHead>
-                          <TableHead className="text-right">Spillage (GB)</TableHead>
-                          <TableHead className="text-right">Monthly Savings</TableHead>
-                          <TableHead>Action</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {sizingData.recommendations.map((rec) => (
-                          <TableRow key={rec.warehouse}>
-                            <TableCell className="font-medium">{rec.warehouse}</TableCell>
-                            <TableCell>{rec.current_size}</TableCell>
-                            <TableCell>
-                              {rec.needs_change ? (
-                                <span className="font-semibold text-sky-700">{rec.recommended_size}</span>
-                              ) : (
-                                <span className="text-muted-foreground">{rec.recommended_size}</span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div className="w-16 h-2 rounded-full bg-slate-100 overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full ${
-                                      rec.avg_utilization > 0.5 ? "bg-emerald-500" :
-                                      rec.avg_utilization > 0.2 ? "bg-amber-500" : "bg-red-500"
-                                    }`}
-                                    style={{ width: `${Math.min(rec.avg_utilization * 100, 100)}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs text-muted-foreground">{(rec.avg_utilization * 100).toFixed(0)}%</span>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right text-sm">
-                              {rec.spill_local_gb > 0 || rec.spill_remote_gb > 0 ? (
-                                <span>{rec.spill_local_gb.toFixed(1)}L / {rec.spill_remote_gb.toFixed(1)}R</span>
-                              ) : (
-                                <span className="text-muted-foreground">None</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {rec.monthly_savings > 0 ? (
-                                <span className="font-semibold text-emerald-600">{formatCurrency(rec.monthly_savings)}</span>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {rec.ddl_command && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => setDdlDialog({
-                                    open: true,
-                                    ddl: rec.ddl_command!,
-                                    type: "resize",
-                                    warehouse: rec.warehouse,
-                                    value: rec.recommended_size,
-                                  })}
-                                >
-                                  Resize
-                                </Button>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              </>
+              <WarehouseHealth
+                data={sizingData}
+                onResize={(rec) => setDdlDialog({
+                  open: true,
+                  ddl: rec.ddl_command!,
+                  type: "resize",
+                  warehouse: rec.warehouse,
+                  value: rec.recommended_size,
+                })}
+              />
             ) : (
               <Skeleton className="h-80 rounded-lg" />
             )}

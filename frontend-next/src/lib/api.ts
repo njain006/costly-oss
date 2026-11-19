@@ -70,8 +70,14 @@ api.interceptors.response.use(
       }
     }
 
+    // Connector errors come as {error: {vendor_message, remediation_hint}};
+    // show what happened and what to do, not a generic failure.
+    const env = error.response?.data?.error;
+    const connectorMsg = env
+      ? [env.vendor_message || env.message, env.remediation_hint].filter(Boolean).join(" ")
+      : null;
     return Promise.reject(
-      error.response?.data?.detail || error.message || "Request failed"
+      connectorMsg || error.response?.data?.detail || error.message || "Request failed"
     );
   }
 );

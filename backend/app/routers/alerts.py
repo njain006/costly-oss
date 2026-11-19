@@ -41,6 +41,7 @@ async def create_alert(alert: AlertCreate, user_id: str = Depends(get_current_us
         "threshold": alert.threshold,
         "channel": alert.channel,
         "webhook_url": alert.webhook_url,
+        "connection_id": alert.connection_id,
         "enabled": True,
         "created_at": datetime.utcnow().isoformat(),
     }
