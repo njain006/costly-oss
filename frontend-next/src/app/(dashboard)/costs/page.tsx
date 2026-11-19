@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { COLORS } from "@/lib/constants";
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 interface CostsData {
   daily: Array<{ date: string; warehouse: string; cost: number; credits: number }>;
@@ -91,6 +91,7 @@ export default function CostAnalysisPage() {
                       <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
                       <Tooltip formatter={(v) => formatCurrency(Number(v))} />
+                      <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                       {chartData.warehouses.map((wh, i) => (
                         <Area key={wh} type="monotone" dataKey={wh} stackId="1" fill={COLORS.chart[i % COLORS.chart.length]} stroke={COLORS.chart[i % COLORS.chart.length]} fillOpacity={0.6} />
                       ))}

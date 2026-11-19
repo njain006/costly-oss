@@ -101,4 +101,39 @@ def _create_cache():
         return _InMemoryCache()
 
 
-cache = _create_cache()
+class _StaleFallback:
+    """Serve the last good result when the fresh one has expired.
+
+    Only keys that a background job explicitly saved a long-lived copy for
+    (``set_with_stale``) ever fall back, so ordinary cache entries behave
+    exactly as before. ``delete`` (the refresh button) drops both copies, so
+    a manual refresh always recomputes."""
+
+    STALE_PREFIX = "stale:"
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def get(self, key: str):
+        val = self._inner.get(key)
+        if val is None:
+            val = self._inner.get(self.STALE_PREFIX + key)
+        return val
+
+    def set(self, key: str, val, ttl: int):
+        self._inner.set(key, val, ttl)
+
+    def set_with_stale(self, key: str, val, ttl: int, stale_ttl: int = 7 * 86400):
+        self._inner.set(key, val, ttl)
+        self._inner.set(self.STALE_PREFIX + key, val, stale_ttl)
+
+    def delete(self, key: str):
+        self._inner.delete(key)
+        self._inner.delete(self.STALE_PREFIX + key)
+
+    def clear_prefix(self, prefix: str):
+        self._inner.clear_prefix(prefix)
+        self._inner.clear_prefix(self.STALE_PREFIX + prefix)
+
+
+cache = _StaleFallback(_create_cache())

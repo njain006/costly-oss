@@ -61,6 +61,17 @@ async def _locked_sync_query_history():
         r.delete("costly:lock:sync_query_history")
 
 
+async def _locked_prewarm():
+    from app.services.prewarm import prewarm_snowflake_pages
+    r = _get_redis_for_lock()
+    if not r.set("costly:lock:prewarm", "1", nx=True, ex=3600):  # a killed run frees within the hour
+        return
+    try:
+        await prewarm_snowflake_pages()
+    finally:
+        r.delete("costly:lock:prewarm")
+
+
 async def _locked_sync_costs():
     r = _get_redis_for_lock()
     if not r.set("costly:lock:sync_costs", "1", nx=True, ex=21600):
@@ -156,6 +167,13 @@ async def startup_event():
         _locked_sync_costs, "date",
         run_date=datetime.utcnow() + timedelta(seconds=120),
         id="platform_cost_boot",
+    )
+    # Precompute Snowflake pages so they open instantly (services/prewarm.py)
+    _scheduler.add_job(_locked_prewarm, "interval", hours=3, id="snowflake_prewarm")
+    _scheduler.add_job(
+        _locked_prewarm, "date",
+        run_date=datetime.utcnow() + timedelta(seconds=30),
+        id="snowflake_prewarm_boot",
     )
     _scheduler.add_job(
         _locked_cost_digest, "cron",

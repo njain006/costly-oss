@@ -21,6 +21,7 @@ interface Recommendation {
   effort: string;
   priority: string;
   ddl_command?: string;
+  current_value?: number;
 }
 
 const categoryIcons: Record<string, typeof Warehouse> = {
@@ -39,6 +40,24 @@ const priorityColors: Record<string, "destructive" | "default" | "secondary"> = 
 export default function RecommendationsPage() {
   const { data, loading } = useApi<Recommendation[]>("/recommendations");
   const totalSavings = data?.reduce((sum, r) => sum + (r.potential_savings || 0), 0) || 0;
+  // One script with every fix, biggest saving first, so the whole plan can
+  // be reviewed and run in a single Snowsight worksheet.
+  const planRecs = (data || [])
+    .filter((r) => r.ddl_command)
+    .sort((a, b) => (b.potential_savings || 0) - (a.potential_savings || 0));
+  const planSql = planRecs.length
+    ? [
+        "-- Review each line, then run in Snowsight as the warehouse owner.",
+        "-- To undo a line, run the commented revert next to it.",
+        ...planRecs.map((r) => {
+          const m = r.ddl_command!.match(/ALTER WAREHOUSE (\S+) SET AUTO_SUSPEND/i);
+          const was = (r as Recommendation & { current_value?: number }).current_value;
+          const save = r.potential_savings ? `  -- saves ~$${Math.round(r.potential_savings)}/mo` : "  -- test, then compare idle %";
+          const revert = m && was ? `\n-- revert: ALTER WAREHOUSE ${m[1]} SET AUTO_SUSPEND = ${was};` : "";
+          return `${r.ddl_command}${save}${revert}`;
+        }),
+      ].join("\n")
+    : "";
 
   const [ddlDialog, setDdlDialog] = useState<{ open: boolean; ddl: string; recId: string }>({
     open: false, ddl: "", recId: "",
@@ -113,6 +132,22 @@ export default function RecommendationsPage() {
             </Card>
           )}
 
+          {planSql && (
+            <Card className="mb-6 border-sky-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Action plan: {planRecs.length} changes{totalSavings > 0 ? `, ~${formatCurrency(totalSavings)}/month` : ""}</CardTitle>
+                <p className="text-xs text-muted-foreground">Every change with a known current setting, biggest saving first, each with its revert line. Copy into a Snowsight worksheet, review, run.</p>
+              </CardHeader>
+              <CardContent>
+                <pre className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs font-mono overflow-x-auto mb-2 whitespace-pre">{planSql}</pre>
+                <Button size="sm" variant="outline" onClick={() => copyDdl(planSql, "__plan")}>
+                  <Copy className="h-3 w-3 mr-1" />
+                  {copied === "__plan" ? "Copied!" : "Copy full script"}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           <div className="space-y-4">
             {data.map((rec) => {
               const Icon = categoryIcons[rec.category] || Lightbulb;
@@ -155,19 +190,9 @@ export default function RecommendationsPage() {
                             onClick={() => copyDdl(rec.ddl_command!, rec.id)}
                           >
                             <Copy className="h-3 w-3 mr-1" />
-                            {copied === rec.id ? "Copied!" : "Copy DDL"}
+                            {copied === rec.id ? "Copied!" : "Copy SQL"}
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setDdlDialog({ open: true, ddl: rec.ddl_command!, recId: rec.id });
-                              setExecResult(null);
-                            }}
-                          >
-                            <Play className="h-3 w-3 mr-1" />
-                            Execute
-                          </Button>
+                          <span className="text-xs text-muted-foreground">Review, then run in Snowsight as the warehouse owner.</span>
                         </div>
                       </div>
                     )}

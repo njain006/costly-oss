@@ -34,7 +34,10 @@ async def get_data_source(user_id: str):
     then falls back to legacy snowflake_connections for backward compat."""
 
     # Check unified system first
-    pc = await db.platform_connections.find_one({"user_id": user_id, "platform": "snowflake"})
+    pc = await db.platform_connections.find_one(
+        {"user_id": user_id, "platform": "snowflake"},
+        sort=[("last_synced", -1), ("created_at", -1)],
+    )
     if pc:
         return _platform_conn_to_sf_doc(pc)
 
@@ -83,4 +86,6 @@ def _platform_conn_to_sf_doc(pc: dict) -> dict:
         "connection_id": str(pc.get("_id", "")),
         "connection_name": pc.get("name", "Snowflake"),
         "user_id": pc.get("user_id", ""),
+        "pricing_overrides": creds.get("pricing_overrides") or pc.get("pricing_overrides") or {},
+        "user_types": pc.get("user_types") or {},
     }

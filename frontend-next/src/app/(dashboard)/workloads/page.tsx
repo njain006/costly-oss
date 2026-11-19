@@ -7,6 +7,7 @@ import DateRangePicker from "@/components/date-range-picker";
 import DemoBanner from "@/components/demo-banner";
 import StatCard from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import AccessHint from "@/components/access-hint";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +56,7 @@ const flagColors: Record<string, string> = {
 
 export default function WorkloadsPage() {
   const { days, refreshTrigger } = useDateRange();
-  const { data, loading } = useApi<WorkloadsData>(
+  const { data, loading, error } = useApi<WorkloadsData>(
     `/workloads?days=${days}&refresh=${refreshTrigger > 0}`,
     [days, refreshTrigger]
   );
@@ -77,8 +78,17 @@ export default function WorkloadsPage() {
       </div>
       <DemoBanner />
 
+      {!loading && !data && (
+        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          Could not load this page{error ? ` (${error})` : ""}. Results are prepared in the background every few hours;
+          try again in a few minutes, or use refresh to compute now (can take a minute on large accounts).
+        </div>
+      )}
       {loading ? (
-        <Skeleton className="h-80 rounded-lg" />
+        <div>
+          <Skeleton className="h-80 rounded-lg" />
+          <p className="text-xs text-muted-foreground mt-2">Loading. The first load on a large account can take up to a minute.</p>
+        </div>
       ) : data ? (
         <Tabs defaultValue="workloads">
           <TabsList>
@@ -131,6 +141,7 @@ export default function WorkloadsPage() {
                     ))}
                   </TableBody>
                 </Table>
+                {data.workloads.length === 0 && <AccessHint what="workloads" denied={(data as { query_history_available?: boolean }).query_history_available === false} />}
               </CardContent>
             </Card>
 

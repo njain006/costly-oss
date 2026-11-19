@@ -6,6 +6,207 @@ _Last updated: 2026-04-24 by overnight research run_
 
 Snowflake is the canonical cost target for Costly and the most battle-tested of our warehouse connectors: it pulls compute + serverless + storage from `ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` (the already-billed-USD view) with automatic fallback to `ACCOUNT_USAGE.METERING_DAILY_HISTORY`, plus Cortex AI, nine serverless credit lines, and per-user/role/query-tag attribution via `QUERY_ATTRIBUTION_HISTORY`. Grade today: **B+ (strong compute coverage, weak query-cost-to-table drill-down and zero support for AI Budgets / Gen-2 warehouses / Iceberg egress).** Top gap: we do not yet pull `WAREHOUSE_LOAD_HISTORY`, `QUERY_HISTORY` (query-level USD), or the new `AI_SERVICES_USAGE_HISTORY` view that GA'd April 2026 with the AI Budgets framework.
 
+## Setup and Permissions
+
+Start with the smallest grant. With only `SNOWFLAKE.USAGE_VIEWER`, Costly shows your bill, cost per warehouse, idle warehouse spend, cost per user, storage and AI spend. Add more grants only for the pages that need them. Each extra grant is listed below with what it exposes.
+
+### 1. Create a read-only role, warehouse and service user
+
+Run as `ACCOUNTADMIN` (or a role with `CREATE ROLE`, `CREATE USER`, `CREATE WAREHOUSE`).
+
+```sql
+-- Safe to re-run. Grants cost and usage metadata only: no access to any
+-- database, table or query text. Costly's own spend is capped at 2 credits/month.
+USE ROLE ACCOUNTADMIN;
+
+-- 1) Read-only role: metering, warehouse, storage history only
+CREATE ROLE IF NOT EXISTS COSTLY_READER
+  COMMENT = 'Read-only cost/usage metadata for Costly';
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER TO ROLE COSTLY_READER;
+
+-- 2) Small dedicated warehouse with a hard spend cap
+CREATE RESOURCE MONITOR IF NOT EXISTS COSTLY_GUARD
+  WITH CREDIT_QUOTA = 2 FREQUENCY = MONTHLY START_TIMESTAMP = IMMEDIATELY
+  TRIGGERS ON 100 PERCENT DO SUSPEND
+           ON 110 PERCENT DO SUSPEND_IMMEDIATE;
+CREATE WAREHOUSE IF NOT EXISTS COSTLY_WH
+  WAREHOUSE_SIZE = 'XSMALL' AUTO_SUSPEND = 60 AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE
+  COMMENT = 'Dedicated XS warehouse for Costly';
+ALTER WAREHOUSE COSTLY_WH SET RESOURCE_MONITOR = COSTLY_GUARD;
+GRANT USAGE ON WAREHOUSE COSTLY_WH TO ROLE COSTLY_READER;
+
+-- 3) Key-pair service user (no password, cannot log in to Snowsight)
+CREATE USER IF NOT EXISTS COSTLY_SVC
+  TYPE = SERVICE
+  DEFAULT_ROLE = COSTLY_READER
+  DEFAULT_WAREHOUSE = COSTLY_WH
+  RSA_PUBLIC_KEY = '<contents of costly_rsa.pub without the BEGIN/END lines>'
+  COMMENT = 'Service account for Costly';
+GRANT ROLE COSTLY_READER TO USER COSTLY_SVC;
+-- Keep the role inside the admin hierarchy so admins can see and manage it.
+GRANT ROLE COSTLY_READER TO ROLE ACCOUNTADMIN;
+
+-- 4) Check: expect USAGE on DATABASE ROLE SNOWFLAKE.USAGE_VIEWER and on COSTLY_WH
+SHOW GRANTS TO ROLE COSTLY_READER;
+
+-- To remove everything:
+--   DROP USER IF EXISTS COSTLY_SVC;
+--   DROP WAREHOUSE IF EXISTS COSTLY_WH;
+--   DROP RESOURCE MONITOR IF EXISTS COSTLY_GUARD;
+--   DROP ROLE IF EXISTS COSTLY_READER;
+```
+Generate the key pair with `openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out costly_rsa.p8` and `openssl rsa -in costly_rsa.p8 -pubout -out costly_rsa.pub`. Keep the `.p8` file private (`chmod 600`) and out of git.
+
+In Costly, connect Snowflake with account identifier `ORGNAME-ACCOUNTNAME`, user `COSTLY_SVC`, role `COSTLY_READER`, warehouse `COSTLY_WH`, and the private key.
+
+Do **not** use `GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE`. It opens every ACCOUNT_USAGE view, including query text, login history and the user list. Costly does not need that to show costs.
+
+### 2. Optional grants, by page
+
+| Grant | What it unlocks in Costly | What it exposes | Risk |
+|---|---|---|---|
+| `SNOWFLAKE.USAGE_VIEWER` (required) | Overview, Dashboard, Cost Analysis, idle spend (Warehouses → Auto-Suspend), cost per user, Storage, AI spend, Recommendations | Credits, storage bytes, warehouse events, per-query cost (no text) | Low |
+| `GRANT MONITOR ON WAREHOUSE <name>` (one per warehouse) | Real auto-suspend and cluster settings on the Warehouses page, so savings are exact rather than estimated | That warehouse's settings and its queries | Low. It cannot start, stop, resize or use the warehouse |
+| `SNOWFLAKE.OBJECT_VIEWER` | "Last altered" dates on the Storage page | Table and database metadata (names, sizes, dates), no data | Low |
+| `SNOWFLAKE.GOVERNANCE_VIEWER` | Query Performance, Query History, Workloads, Spillage, Stale Tables (needs ACCESS_HISTORY, Enterprise edition), right-sizing | **Full query text** and access history | High. Query text can contain customer data typed into filters. Get a security sign-off first |
+| Organization billing role, granted from the org account or by ORGADMIN | Billed USD read directly from `ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY`, so no manual prices | Contract rates and billed amounts | Low. Confirm the exact role name in Snowflake's cost access docs (it has changed over time) |
+
+When a grant is missing, the page says which view it could not read instead of showing an empty table. Recommendations lists the checks it skipped.
+
+SHOW WAREHOUSES only returns warehouses the role holds a privilege on. Without `MONITOR`, Costly still lists every warehouse that used credits, using size from `WAREHOUSE_EVENTS_HISTORY`, but shows auto-suspend as unknown.
+
+### 3. Set your prices
+
+If Costly cannot read billed USD (the org billing role above), it prices credits itself. Set these on the connection (`PUT /api/platforms/{connection_id}/pricing` with a body such as `{"pricing_overrides": {"credit_price": 3.0, "ai_credit_price": 2.0}}`, then re-sync. The call replaces all overrides, so send every key you want kept), or numbers will be off by your discount:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `credit_price` | USD per compute credit (warehouses, cloud services, serverless) | Edition list price ($3 Enterprise) |
+| `ai_credit_price` | USD per AI credit (Cortex AI functions, Copilot / Cortex Code). Snowflake bills these as a separate rating type, usually at a different rate | Same as `credit_price` |
+| `storage_price_per_tb` | USD per TB-month | $23 |
+| `service_type_prices` | Per `SERVICE_TYPE` override, e.g. `{"TRUST_CENTER": 3.0}` | — |
+
+Find your rates in Snowsight → Admin → Cost Management, or ask whoever holds the contract. Costly logs a warning if it sees AI spend but no `ai_credit_price`.
+
+### 4. Check it matches your bill
+
+After the first sync, compare Costly's 30-day total with Snowflake for the same UTC dates. They should agree within about 1%. If they don't, the usual causes are a missing price setting or a date range in a different timezone.
+
+Run these as an admin in a Snowsight worksheet. They are all read-only SELECTs. Set the session to UTC first so days line up with the invoice:
+
+```sql
+ALTER SESSION SET TIMEZONE = 'UTC';
+```
+
+**Billed dollars by service** (needs org billing access, which `ACCOUNTADMIN` usually has). This is the number Costly's Overview should match. The `adj for incl cloud services` row is negative: it is the 10% cloud services allowance and must be included.
+
+```sql
+SELECT SERVICE_TYPE, USAGE_TYPE,
+       ROUND(SUM(USAGE), 2) AS usage,
+       ROUND(SUM(USAGE_IN_CURRENCY), 2) AS usd,
+       ROUND(SUM(USAGE_IN_CURRENCY) / NULLIF(SUM(USAGE), 0), 3) AS rate
+FROM SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
+WHERE USAGE_DATE BETWEEN '<start>' AND '<end>'
+  AND ACCOUNT_LOCATOR = CURRENT_ACCOUNT()
+GROUP BY ALL
+ORDER BY usd DESC;
+```
+
+The `rate` column gives your contract prices: use the `compute` row for `credit_price` and the `ai functions` row for `ai_credit_price`.
+
+**Billed credits by service** (works with `USAGE_VIEWER`). Multiply by your rates to get dollars:
+
+```sql
+SELECT SERVICE_TYPE,
+       ROUND(SUM(CREDITS_USED), 2) AS used,
+       ROUND(SUM(CREDITS_ADJUSTMENT_CLOUD_SERVICES), 2) AS cloud_services_allowance,
+       ROUND(SUM(CREDITS_BILLED), 2) AS billed
+FROM SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY
+WHERE USAGE_DATE BETWEEN '<start>' AND '<end>'
+GROUP BY 1
+ORDER BY billed DESC;
+```
+
+**Total storage** (Costly's Storage page total). Billing uses the daily average over the month:
+
+```sql
+SELECT USAGE_DATE,
+       ROUND(STORAGE_BYTES  / POWER(1024, 3), 1) AS table_gb,
+       ROUND(STAGE_BYTES    / POWER(1024, 3), 1) AS stage_gb,
+       ROUND(FAILSAFE_BYTES / POWER(1024, 3), 1) AS failsafe_gb
+FROM SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
+ORDER BY USAGE_DATE DESC
+LIMIT 3;
+```
+
+**Idle spend per warehouse** (Warehouses → Auto-Suspend):
+
+```sql
+SELECT WAREHOUSE_NAME,
+       ROUND(SUM(CREDITS_USED_COMPUTE), 1) AS metered,
+       ROUND(SUM(CREDITS_ATTRIBUTED_COMPUTE_QUERIES), 1) AS used_by_queries,
+       ROUND(100 * (1 - SUM(CREDITS_ATTRIBUTED_COMPUTE_QUERIES) / NULLIF(SUM(CREDITS_USED_COMPUTE), 0)), 1) AS idle_pct
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+WHERE START_TIME >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+  AND WAREHOUSE_ID > 0
+GROUP BY 1
+ORDER BY metered DESC;
+```
+
+**Cost per user and per query tag** (Dashboard → Top Users). Excludes idle time:
+
+```sql
+SELECT USER_NAME, NULLIF(QUERY_TAG, '') AS query_tag,
+       ROUND(SUM(CREDITS_ATTRIBUTED_COMPUTE), 1) AS credits,
+       COUNT(*) AS queries
+FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY
+WHERE START_TIME >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+GROUP BY ALL
+ORDER BY credits DESC
+LIMIT 20;
+```
+
+**Cortex AI spend by tag and model** (Recommendations → AI spend):
+
+```sql
+SELECT MODEL_NAME, FUNCTION_NAME, QUERY_TAG,
+       COUNT(DISTINCT QUERY_ID) AS queries,
+       ROUND(SUM(TOKENS) / 1e6, 1) AS million_tokens,
+       ROUND(SUM(TOKEN_CREDITS), 1) AS credits
+FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AISQL_USAGE_HISTORY
+WHERE USAGE_TIME >= DATEADD('day', -7, CURRENT_TIMESTAMP())
+GROUP BY ALL
+ORDER BY credits DESC;
+```
+
+**Warehouse size and starts** (Costly uses this when the role cannot see SHOW WAREHOUSES). Size is only set on `WAREHOUSE_CONSISTENT` rows:
+
+```sql
+SELECT WAREHOUSE_NAME, EVENT_NAME, SIZE, CLUSTER_COUNT, COUNT(*) AS n
+FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_EVENTS_HISTORY
+WHERE TIMESTAMP >= DATEADD('day', -30, CURRENT_TIMESTAMP())
+GROUP BY ALL
+ORDER BY 1, n DESC;
+```
+
+**What the Costly role can read.** `GRANTS_TO_ROLES` lags up to 2 hours, so a brand-new role may return nothing yet; use `SHOW GRANTS TO ROLE COSTLY_READER` for an instant answer.
+
+```sql
+SELECT GRANTEE_NAME, PRIVILEGE, GRANTED_ON, NAME
+FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES
+WHERE GRANTEE_NAME = 'COSTLY_READER' AND DELETED_ON IS NULL;
+```
+
+### Things to know
+
+- **Latency.** Metering lags up to 3 hours, cloud services up to 6, and per-query cost up to 8. Today's numbers are always partial.
+- **UTC days.** Snowflake bills by UTC day. Costly pins its session to UTC so daily totals match the invoice.
+- **Cost per user leaves out idle time.** It comes from `QUERY_ATTRIBUTION_HISTORY`, which skips warehouse idle time, cloud services and queries under about 100 ms. It adds up to less than the bill on purpose; the gap is shown as idle spend per warehouse.
+- **Idle spend** is `CREDITS_USED_COMPUTE − CREDITS_ATTRIBUTED_COMPUTE_QUERIES` per warehouse. It includes the auto-suspend tail, the 60-second minimum billed on every start, and gaps between queries. It is the most that tuning can save, not a promise.
+- **Per-query attribution history** is only complete from mid-August 2024.
+
+
 ## Pricing Model (from vendor)
 
 Snowflake prices compute and storage separately, with serverless lines layered on top. All values below reflect the **April 2026 on-demand list** — capacity contracts and Enterprise/Premier Support deals routinely discount 10-45%.
@@ -94,7 +295,7 @@ Sources:
 
 ### Primary
 
-**`SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY`** (the canonical source; requires ORGADMIN-granted `SNOWFLAKE.ORGANIZATION_USAGE_VIEWER` database role).
+**`SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY`** (the canonical source; needs an organization billing role granted from the org account or by ORGADMIN — see [Setup and Permissions](#setup-and-permissions)).
 
 Returns already-billed USD per day per account per service type, nets the 10% Cloud Services allowance, honors on-demand-vs-capacity pricing, handles currency conversion for non-USD accounts. One row per `(usage_date, account_name, service_type, usage_type)`.
 
@@ -113,21 +314,13 @@ WHERE USAGE_DATE >= DATEADD(day, -:days, CURRENT_DATE())
 GROUP BY 1, 2, 3, 4;
 ```
 
-Auth: Key-pair recommended (`rsa_key`), with a dedicated role, e.g.:
-
-```sql
-CREATE ROLE COSTLY_READER;
-GRANT DATABASE ROLE SNOWFLAKE.ORGANIZATION_USAGE_VIEWER TO ROLE COSTLY_READER;
-GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE COSTLY_READER;
-GRANT USAGE ON WAREHOUSE COSTLY_WH TO ROLE COSTLY_READER;
-GRANT ROLE COSTLY_READER TO USER COSTLY_SERVICE;
-```
+Auth and grants: see [Setup and Permissions](#setup-and-permissions). This view needs an organization billing role; without it Costly falls back to `METERING_DAILY_HISTORY` plus your price settings.
 
 Latency: ~15 min–3 hours typical (Snowflake docs commit ≤2 hours).
 
 ### Secondary / Fallback
 
-- **`SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY`** — credits per day per service type, with `CREDITS_ADJUSTMENT_CLOUD_SERVICES` for the 10% rebate. Latency 30 min-2 hours. Requires `IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE`.
+- **`SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY`** — credits per day per service type, with `CREDITS_ADJUSTMENT_CLOUD_SERVICES` for the 10% rebate. Latency 30 min-2 hours. Readable with `SNOWFLAKE.USAGE_VIEWER`.
 - **`SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY`** — per-warehouse credit lines. Finer grain but has only `CREDITS_USED_COMPUTE` + `CREDITS_USED_CLOUD_SERVICES` (no net), so the 10% allowance is only correctly applied when joined with `METERING_DAILY_HISTORY`.
 - **`METERING_HISTORY`** — hourly (versus daily) resolution; useful for intra-day spike detection but costs 24× more rows.
 - **Snowsight Cost Management** UI — reads the same views; for eyeball sanity-checks only.
@@ -512,6 +705,8 @@ Source: `backend/app/services/connectors/snowflake_connector.py` (~1,220 lines, 
 - "Snowflake Expert" agent (see `costly-expert-agents.md`) that ingests the full tool registry and can answer any cost/perf question about the customer's account.
 
 ## Change Log
+
+- 2026-11-19: **Setup and Permissions section; billing reconciliation fixes.** Least-privilege setup (`USAGE_VIEWER` only, no `IMPORTED PRIVILEGES`), page-by-grant table, price settings (`ai_credit_price` new). Connector: serverless and time-travel rows are drill-down only (METERING_DAILY_HISTORY already bills them); billed-USD path keeps the negative cloud services adjustment, filters to `CURRENT_ACCOUNT()`, skips STORAGE (priced per database); AI service types priced as AI credits; stale rows removed on re-sync. Verified against `USAGE_IN_CURRENCY_DAILY` on a production account: within 0.1% over 30 days.
 
 - 2026-04-24: Initial knowledge-base created by overnight research run.
 - 2026-04-24: **AI_SERVICES_USAGE_HISTORY (April 2026 GA) wired in.** New `_fetch_ai_services()` method ingests the consolidated AI view and emits per-model/per-family drill-down records (Cortex Functions, Cortex Analyst, Cortex Search, Document AI, Universal Search). Records are tagged `metadata.drilldown = True` so aggregators don't double-count against the billed-USD parent row. Added four new `CostCategory.ai_inference` service slugs: `snowflake_cortex_analyst`, `snowflake_cortex_search`, `snowflake_document_ai`, `snowflake_universal_search`. Introduced `PricingConfig.cortex_model_prices` override (lowercased model-name keyed) plus the new `credit_price_for_cortex_model()` resolver — supports Llama-3 vs Claude differential pricing when a customer has negotiated model-specific rates. Opt-out via `pricing_overrides.enable_ai_services_drilldown = False`. Permission failures emit the canonical `GRANT IMPORTED PRIVILEGES` remediation; missing-view errors on pre-April-2026 accounts surface a softer warning (so the fetch keeps going).

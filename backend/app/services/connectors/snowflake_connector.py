@@ -125,6 +125,13 @@ SERVICE_TYPE_CATEGORY: dict[str, CostCategory] = {
     "HYBRID_TABLE_REQUESTS": CostCategory.compute,
     "ICEBERG_TABLE_REQUESTS": CostCategory.storage,
     "SNOWPARK_CONTAINER_SERVICES": CostCategory.compute,
+    "AI_FUNCTIONS": CostCategory.ai_inference,
+    "AI_INFERENCE": CostCategory.ai_inference,
+    "SNOWFLAKE_COCO_SNOWSIGHT": CostCategory.ai_inference,
+    "SNOWFLAKE_COCO_CLI": CostCategory.ai_inference,
+    "TRUST_CENTER": CostCategory.compute,
+    "TELEMETRY_DATA_INGEST": CostCategory.ingestion,
+    "COPY_FILES": CostCategory.compute,
 }
 
 # SERVICE_TYPE -> service slug we expose (prefixed with snowflake_ so the
@@ -155,7 +162,42 @@ SERVICE_TYPE_SLUG: dict[str, str] = {
     "HYBRID_TABLE_REQUESTS": "snowflake_hybrid_tables",
     "ICEBERG_TABLE_REQUESTS": "snowflake_iceberg",
     "SNOWPARK_CONTAINER_SERVICES": "snowflake_snowpark_container_services",
+    "AI_FUNCTIONS": "snowflake_cortex",
+    "AI_INFERENCE": "snowflake_cortex",
+    "SNOWFLAKE_COCO_SNOWSIGHT": "snowflake_copilot",
+    "SNOWFLAKE_COCO_CLI": "snowflake_copilot",
+    "TRUST_CENTER": "snowflake_trust_center",
+    "TELEMETRY_DATA_INGEST": "snowflake_event_tables",
+    "COPY_FILES": "snowflake_copy_files",
 }
+
+
+# Human-readable names for account-level rows (METERING_DAILY_HISTORY).
+SERVICE_TYPE_LABEL: dict[str, str] = {
+    "WAREHOUSE_METERING": "Warehouse compute",
+    "AI_FUNCTIONS": "Cortex AI functions",
+    "AI_INFERENCE": "Cortex AI inference",
+    "SNOWFLAKE_COCO_SNOWSIGHT": "Copilot in Snowsight",
+    "SNOWFLAKE_COCO_CLI": "Cortex Code CLI",
+    "TRUST_CENTER": "Trust Center scans",
+    "SNOWPARK_CONTAINER_SERVICES": "Snowpark Container Services",
+    "TELEMETRY_DATA_INGEST": "Telemetry ingest",
+    "COPY_FILES": "Copy files",
+    "QUERY_ACCELERATION": "Query acceleration",
+    "SERVERLESS_TASK": "Serverless tasks",
+    "PIPE": "Snowpipe",
+    "AUTO_CLUSTERING": "Automatic clustering",
+    "MATERIALIZED_VIEW": "Materialized views",
+    "SEARCH_OPTIMIZATION": "Search optimization",
+    "REPLICATION": "Replication",
+}
+
+
+def is_ai_service_type(service_type: str) -> bool:
+    """AI services are billed as AI credits (RATING_TYPE AI_COMPUTE)."""
+    st = (service_type or "").upper()
+    return st.startswith(("AI_", "CORTEX", "SNOWFLAKE_COCO", "DOCUMENT_AI", "COPILOT")) \
+        or st in ("UNIVERSAL_SEARCH",)
 
 # Mapping of AI function family -> canonical service type key used by the
 # AI_SERVICES_USAGE_HISTORY normaliser. The ACCOUNT_USAGE view consolidates
@@ -220,6 +262,11 @@ class PricingConfig:
     # and `drilldown=True` in metadata so callers can choose whether to
     # include or exclude them in aggregations. Default True.
     enable_ai_services_drilldown: bool = True
+    enable_attribution_drilldown: bool = False
+    # $/credit for AI services (Cortex, AI functions, Copilot). Snowflake
+    # bills these as "AI credits", usually at a different contract rate than
+    # compute. None = same as credit_price_usd.
+    ai_credit_price_usd: Optional[float] = None
 
     @classmethod
     def from_credentials(cls, credentials: dict) -> "PricingConfig":
@@ -293,6 +340,9 @@ class PricingConfig:
                 if f > 0:
                     cortex_model_prices[str(model).strip().lower()] = f
 
+        ai_raw = overrides.get("ai_credit_price_usd", overrides.get("ai_credit_price"))
+        ai_credit_price = _positive(ai_raw, 0.0) or None
+
         prefer_org_usage = bool(overrides.get("prefer_org_usage", True))
         enable_ai_services_drilldown = bool(
             overrides.get("enable_ai_services_drilldown", True)
@@ -308,6 +358,8 @@ class PricingConfig:
             cortex_model_prices=cortex_model_prices,
             prefer_org_usage=prefer_org_usage,
             enable_ai_services_drilldown=enable_ai_services_drilldown,
+            enable_attribution_drilldown=bool(overrides.get("enable_attribution_drilldown", False)),
+            ai_credit_price_usd=ai_credit_price,
         )
 
     def credit_price_for_warehouse(self, warehouse_size: Optional[str]) -> float:
@@ -319,9 +371,12 @@ class PricingConfig:
     def credit_price_for_service_type(self, service_type: Optional[str]) -> float:
         if not service_type:
             return self.credit_price_usd
-        return self.service_type_prices.get(
-            str(service_type).upper(), self.credit_price_usd
-        )
+        st = str(service_type).upper()
+        if st in self.service_type_prices:
+            return self.service_type_prices[st]
+        if self.ai_credit_price_usd and is_ai_service_type(st):
+            return self.ai_credit_price_usd
+        return self.credit_price_usd
 
     def credit_price_for_cortex_model(
         self, model_name: Optional[str], service_type: str = "CORTEX"
@@ -599,13 +654,35 @@ class SnowflakeConnector(BaseConnector):
 
                 if not used_org_usage:
                     # Fall back to ACCOUNT_USAGE metering + serverless views.
-                    costs.extend(self._fetch_metering_daily(cur, days))
-                    costs.extend(self._fetch_serverless(cur, days))
+                    metering = self._fetch_metering_daily(cur, days)
+                    costs.extend(metering)
+                    serverless = self._fetch_serverless(cur, days)
+                    # Only when the rows are the full bill (METERING_DAILY_HISTORY).
+                    # The WAREHOUSE_METERING_HISTORY fallback has warehouses only,
+                    # so serverless rows must stay in the ledger then.
+                    full_bill = any(
+                        "METERING_DAILY_HISTORY" in str((r.metadata or {}).get("source", ""))
+                        for r in metering
+                    )
+                    if full_bill:
+                        # METERING_DAILY_HISTORY already bills every service
+                        # type (tasks, pipes, clustering, AI, SPCS...). The
+                        # per-view rows only add detail; summing both
+                        # double counts.
+                        for row in serverless:
+                            row.metadata = {**(row.metadata or {}), "drilldown": True}
+                    costs.extend(serverless)
+                    self._warn_ai_pricing(metering)
 
                 # Attribution, storage breakdown and Cortex always run on top
                 # regardless of which primary source we used — they provide
                 # dimensions that USAGE_IN_CURRENCY_DAILY does not.
-                costs.extend(self._fetch_attribution(cur, days))
+                # Attribution re-describes compute already billed via metering,
+                # so rows are tagged drilldown (never summed into totals) and
+                # the query is opt-in. Per-warehouse cost comes from
+                # _warehouse_daily_split(), which reconciles to the bill.
+                if self.pricing.enable_attribution_drilldown:
+                    costs.extend(self._fetch_attribution(cur, days))
                 costs.extend(self._fetch_storage(cur, days))
 
                 # AI_SERVICES_USAGE_HISTORY (April 2026 GA) — per-model and
@@ -654,6 +731,8 @@ class SnowflakeConnector(BaseConnector):
                 ANY_VALUE(CURRENCY) AS CURRENCY
             FROM SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
             WHERE USAGE_DATE >= DATEADD(day, -{int(days)}, CURRENT_DATE())
+              -- An org account sees every account's bill; keep only ours.
+              AND ACCOUNT_LOCATOR = CURRENT_ACCOUNT()
             GROUP BY 1, 2, 3, 4
             ORDER BY 1
         """
@@ -668,13 +747,55 @@ class SnowflakeConnector(BaseConnector):
                 )
             raise
 
+        raw = list(_fetchall(cur))
+        split = self._warehouse_daily_split(cur, days) if raw else {}
+        # Several usage types can bill WAREHOUSE_METERING on one day; merge
+        # them so the per-warehouse split rows don't overwrite each other.
+        merged: dict = {}
+        rest = []
+        for row in raw:
+            if str(row[2] or "").upper() == "WAREHOUSE_METERING":
+                key = (row[0], row[1])
+                m = merged.setdefault(key, [row[0], row[1], row[2], row[3], 0.0, row[5], 0.0, row[7]])
+                m[4] += float(row[4] or 0)
+                m[6] += float(row[6] or 0)
+            else:
+                rest.append(row)
+        raw = rest + [tuple(v) for v in merged.values()]
         rows: list[UnifiedCost] = []
-        for row in _fetchall(cur):
+        for row in raw:
             usage_date, account_name, service_type, usage_type, usage, usage_units, usd, currency = row
             cost_usd = float(usd or 0)
-            if cost_usd <= 0:
+            # Keep negative rows: "adj for incl cloud services" is the 10%
+            # cloud services allowance and must reduce the total.
+            if cost_usd == 0:
                 continue
             stype = str(service_type or "").upper()
+            # Storage comes from _fetch_storage (per database, same price);
+            # taking it here too would count it twice.
+            if stype == "STORAGE":
+                continue
+            day = _normalize_date(usage_date)
+            wh_split = split.get(str(day)) if stype == "WAREHOUSE_METERING" else None
+            if wh_split and sum(wh_split.values()) > 0:
+                total = sum(wh_split.values())
+                rate = cost_usd / float(usage) if usage else 0.0
+                for wh, wh_credits in wh_split.items():
+                    share = wh_credits / total
+                    rows.append(UnifiedCost(
+                        date=day, platform="snowflake", service="snowflake_compute",
+                        resource=wh, category=CostCategory.compute,
+                        cost_usd=round(cost_usd * share, 4),
+                        usage_quantity=round(float(usage or 0) * share, 4),
+                        usage_unit="credits",
+                        metadata={
+                            "source": "ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY split by WAREHOUSE_METERING_HISTORY",
+                            "service_type": stype, "warehouse": wh,
+                            "credit_price_usd": round(rate, 4),
+                            "currency": currency or "USD",
+                        },
+                    ))
+                continue
             category = SERVICE_TYPE_CATEGORY.get(stype, CostCategory.compute)
             slug = SERVICE_TYPE_SLUG.get(stype, "snowflake_" + stype.lower())
             resource = usage_type or service_type or "Snowflake"
@@ -738,8 +859,10 @@ class SnowflakeConnector(BaseConnector):
             self.warnings.append(f"METERING_DAILY_HISTORY query failed: {e}")
             return self._fetch_warehouse_metering(cur, days)
 
+        metering_rows = _fetchall(cur)
+        split = self._warehouse_daily_split(cur, days) if metering_rows else {}
         rows: list[UnifiedCost] = []
-        for row in _fetchall(cur):
+        for row in metering_rows:
             usage_date, service_type, credits_compute, credits_cloud, credits_cloud_adj, _billed = row
             stype = str(service_type or "COMPUTE").upper()
             credit_price = self.pricing.credit_price_for_service_type(stype)
@@ -748,13 +871,40 @@ class SnowflakeConnector(BaseConnector):
             cloud_adj = float(credits_cloud_adj or 0)
             net_cloud_credits = max(cloud_credits + cloud_adj, 0.0)
 
-            if compute_credits > 0:
+            # Split account-level warehouse compute per warehouse,
+            # scaled so the per-warehouse rows sum exactly to the billed day.
+            day = _normalize_date(usage_date)
+            wh_split = split.get(day) if stype == "WAREHOUSE_METERING" else None
+            wh_total = sum(wh_split.values()) if wh_split else 0.0
+            if compute_credits > 0 and wh_total > 0:
+                for wh, wh_credits in wh_split.items():
+                    share = compute_credits * (wh_credits / wh_total)
+                    if share <= 0:
+                        continue
+                    rows.append(
+                        UnifiedCost(
+                            date=day,
+                            platform="snowflake",
+                            service="snowflake_compute",
+                            resource=str(wh),
+                            category=CostCategory.compute,
+                            cost_usd=round(share * credit_price, 4),
+                            usage_quantity=round(share, 4),
+                            usage_unit="credits",
+                            metadata={
+                                "source": "METERING_DAILY_HISTORY split by WAREHOUSE_METERING_HISTORY (UTC)",
+                                "service_type": stype,
+                                "credit_price_usd": credit_price,
+                            },
+                        )
+                    )
+            elif compute_credits > 0:
                 rows.append(
                     UnifiedCost(
                         date=_normalize_date(usage_date),
                         platform="snowflake",
                         service=SERVICE_TYPE_SLUG.get(stype, "snowflake_compute"),
-                        resource=f"{stype.title().replace('_', ' ')} (compute)",
+                        resource=SERVICE_TYPE_LABEL.get(stype, stype.title().replace('_', ' ')),
                         category=SERVICE_TYPE_CATEGORY.get(stype, CostCategory.compute),
                         cost_usd=round(compute_credits * credit_price, 4),
                         usage_quantity=round(compute_credits, 4),
@@ -772,7 +922,8 @@ class SnowflakeConnector(BaseConnector):
                         date=_normalize_date(usage_date),
                         platform="snowflake",
                         service="snowflake_cloud_services",
-                        resource=f"{stype.title().replace('_', ' ')} (cloud services)",
+                        resource=("Cloud services" if stype == "WAREHOUSE_METERING"
+                                  else f"{SERVICE_TYPE_LABEL.get(stype, stype.title().replace('_', ' '))} (cloud services)"),
                         category=CostCategory.compute,
                         cost_usd=round(net_cloud_credits * credit_price, 4),
                         usage_quantity=round(net_cloud_credits, 4),
@@ -787,6 +938,34 @@ class SnowflakeConnector(BaseConnector):
                     )
                 )
         return rows
+
+    def _warehouse_daily_split(self, cur, days: int) -> dict[str, dict[str, float]]:
+        """{utc_date: {warehouse: compute_credits}}.
+
+        METERING_DAILY_HISTORY days are UTC; WAREHOUSE_METERING_HISTORY times
+        are in the session timezone, so convert to UTC before bucketing.
+        Returns {} on any failure (caller falls back to one account row).
+        """
+        sql = f"""
+            SELECT
+                TO_CHAR(CONVERT_TIMEZONE('UTC', START_TIME)::DATE, 'YYYY-MM-DD') AS D,
+                WAREHOUSE_NAME,
+                SUM(CREDITS_USED_COMPUTE) AS CREDITS_COMPUTE
+            FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+            WHERE START_TIME >= DATEADD(day, -{int(days) + 1}, CURRENT_TIMESTAMP())
+            GROUP BY 1, 2
+        """
+        try:
+            cur.execute(sql)
+            out: dict[str, dict[str, float]] = {}
+            for d, wh, credits in _fetchall(cur):
+                c = float(credits or 0)
+                if c > 0:
+                    out.setdefault(_normalize_date(d), {})[str(wh)] = c
+            return out
+        except Exception as e:  # noqa: BLE001
+            self.warnings.append(f"Per-warehouse split unavailable: {e}")
+            return {}
 
     def _fetch_warehouse_metering(self, cur, days: int) -> list[UnifiedCost]:
         """Last-resort compute path: WAREHOUSE_METERING_HISTORY.
@@ -940,6 +1119,21 @@ class SnowflakeConnector(BaseConnector):
             "CREDITS_USED",
         ),
     )
+
+    def _warn_ai_pricing(self, rows: list[UnifiedCost]) -> None:
+        if self.pricing.ai_credit_price_usd or "AI_FUNCTIONS" in self.pricing.service_type_prices:
+            return
+        ai_usd = sum(
+            r.cost_usd for r in rows
+            if is_ai_service_type((r.metadata or {}).get("service_type", ""))
+        )
+        if ai_usd > 0:
+            self.warnings.append(
+                f"AI services (${ai_usd:,.0f}) priced at the compute credit rate. "
+                "Snowflake bills these as AI credits, often at a different rate: set "
+                "pricing_overrides.ai_credit_price, or grant ORGANIZATION_BILLING_VIEWER "
+                "so billed USD is read directly."
+            )
 
     def _fetch_serverless(self, cur, days: int) -> list[UnifiedCost]:
         """Query each serverless credit view.
@@ -1152,6 +1346,7 @@ class SnowflakeConnector(BaseConnector):
                     project=query_tag or None,
                     metadata={
                         "source": "ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY",
+                        "drilldown": True,
                         "user_name": user_name,
                         "role_name": role_name,
                         "query_tag": query_tag,
@@ -1249,8 +1444,9 @@ class SnowflakeConnector(BaseConnector):
                         },
                     )
                 )
-        # Also pull time-travel via TABLE_STORAGE_METRICS (it does not appear
-        # in DATABASE_STORAGE_USAGE_HISTORY — only active + failsafe do).
+        # AVERAGE_DATABASE_BYTES already includes Time Travel bytes, so the
+        # TABLE_STORAGE_METRICS time-travel rows are detail only (drilldown),
+        # never added to the total.
         rows.extend(self._fetch_time_travel_storage(cur, days))
         return rows
 
@@ -1310,6 +1506,7 @@ class SnowflakeConnector(BaseConnector):
                         "tier": "time_travel",
                         "price_per_tb_month": self.pricing.timetravel_storage_price_per_tb,
                         "note": "snapshot (current retention, not daily history)",
+                        "drilldown": True,
                     },
                 )
             )

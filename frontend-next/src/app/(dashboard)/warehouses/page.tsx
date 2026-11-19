@@ -22,7 +22,7 @@ import { AlertTriangle, TrendingDown, DollarSign } from "lucide-react";
 
 interface WarehouseInfo {
   name: string; size: string; state: string; auto_suspend: number;
-  min_cluster: number; max_cluster: number; credits_per_hour: number;
+  min_cluster: number; max_cluster: number; credits_per_hour: number; config_visible?: boolean;
 }
 
 interface WarehouseData {
@@ -48,15 +48,17 @@ interface SizingData {
 }
 
 interface AutoSuspendRec {
-  warehouse: string; current_suspend_s: number; recommended_suspend_s: number;
+  warehouse: string; current_suspend_s: number | null; recommended_suspend_s: number | null;
   resume_count: number; idle_waste_credits: number; monthly_savings: number;
-  ddl_command: string | null; gap_p50_s: number; gap_p75_s: number; needs_change: boolean;
+  ddl_command: string | null; gap_p50_s: number | null; gap_p75_s: number | null; needs_change: boolean;
+  size?: string | null; metered_credits?: number; idle_pct?: number; idle_cost_monthly?: number; note?: string | null;
 }
 
 interface AutoSuspendData {
   recommendations: AutoSuspendRec[];
   total_monthly_savings: number;
   fetched_at?: string; demo?: boolean;
+  total_idle_cost_monthly?: number;
 }
 
 interface SpillageData {
@@ -156,17 +158,27 @@ export default function WarehousesPage() {
                         <TableCell>{wh.size}</TableCell>
                         <TableCell>
                           <Badge variant={wh.state === "RUNNING" ? "default" : "secondary"} className="text-xs">
-                            {wh.state}
+                            {wh.state === "unknown" ? "—" : wh.state}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          {wh.auto_suspend}s
-                          {wh.auto_suspend > 300 && (
-                            <Badge variant="destructive" className="text-xs ml-2">High</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>{wh.min_cluster}-{wh.max_cluster}</TableCell>
-                        <TableCell>{wh.credits_per_hour}</TableCell>
+                        {wh.config_visible === false ? (
+                          <>
+                            <TableCell className="text-muted-foreground" title="This role cannot see the warehouse settings. Grant MONITOR on the warehouse to show them.">—</TableCell>
+                            <TableCell className="text-muted-foreground">—</TableCell>
+                            <TableCell>{wh.credits_per_hour || "—"}</TableCell>
+                          </>
+                        ) : (
+                          <>
+                            <TableCell>
+                              {wh.auto_suspend === 0 ? "never" : `${wh.auto_suspend}s`}
+                              {(wh.auto_suspend > 300 || wh.auto_suspend === 0) && (
+                                <Badge variant="destructive" className="text-xs ml-2">High</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>{wh.min_cluster}-{wh.max_cluster}</TableCell>
+                            <TableCell>{wh.credits_per_hour}</TableCell>
+                          </>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -341,6 +353,15 @@ export default function WarehousesPage() {
           <TabsContent value="autosuspend">
             {suspendData ? (
               <>
+                {(suspendData.total_idle_cost_monthly ?? 0) > 0 && (
+                  <Card className="mb-6 bg-amber-50 border-amber-200">
+                    <CardContent className="p-5">
+                      <div className="text-sm text-amber-800">Idle warehouse spend (running with no queries), per month</div>
+                      <div className="text-3xl font-bold text-amber-900">{formatCurrency(suspendData.total_idle_cost_monthly!)}</div>
+                      <div className="text-xs text-amber-700 mt-1">Metered compute minus credits attributed to queries. Includes auto-suspend tails, the 60s minimum per resume and gaps between queries. Upper bound on what tuning can save.</div>
+                    </CardContent>
+                  </Card>
+                )}
                 {suspendData.total_monthly_savings > 0 && (
                   <Card className="mb-6 bg-emerald-50 border-emerald-200">
                     <CardContent className="p-5 flex items-center gap-4">
@@ -363,6 +384,8 @@ export default function WarehousesPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Warehouse</TableHead>
+                          <TableHead className="text-right">Idle %</TableHead>
+                          <TableHead className="text-right">Idle $/mo</TableHead>
                           <TableHead className="text-right">Current</TableHead>
                           <TableHead className="text-right">Recommended</TableHead>
                           <TableHead className="text-right">P75 Gap</TableHead>
@@ -375,16 +398,24 @@ export default function WarehousesPage() {
                       <TableBody>
                         {suspendData.recommendations.map((rec) => (
                           <TableRow key={rec.warehouse}>
-                            <TableCell className="font-medium">{rec.warehouse}</TableCell>
-                            <TableCell className="text-right">{rec.current_suspend_s}s</TableCell>
+                            <TableCell className="font-medium whitespace-normal min-w-[220px] max-w-[360px]">
+                              {rec.warehouse}
+                              {rec.size && <span className="ml-1 text-xs text-muted-foreground">{rec.size}</span>}
+                              {rec.note && <div className="text-xs text-muted-foreground font-normal">{rec.note}</div>}
+                            </TableCell>
+                            <TableCell className={`text-right text-sm ${(rec.idle_pct ?? 0) >= 50 ? "text-amber-600 font-semibold" : ""}`}>{rec.idle_pct != null ? `${rec.idle_pct.toFixed(0)}%` : "—"}</TableCell>
+                            <TableCell className="text-right text-sm">{rec.idle_cost_monthly != null ? formatCurrency(rec.idle_cost_monthly) : "—"}</TableCell>
+                            <TableCell className="text-right">{rec.current_suspend_s != null ? `${rec.current_suspend_s}s` : "?"}</TableCell>
                             <TableCell className="text-right">
-                              {rec.needs_change ? (
+                              {rec.recommended_suspend_s == null ? (
+                                <span className="text-muted-foreground">—</span>
+                              ) : rec.needs_change ? (
                                 <span className="font-semibold text-sky-700">{rec.recommended_suspend_s}s</span>
                               ) : (
                                 <span className="text-muted-foreground">{rec.recommended_suspend_s}s</span>
                               )}
                             </TableCell>
-                            <TableCell className="text-right text-sm">{rec.gap_p75_s}s</TableCell>
+                            <TableCell className="text-right text-sm">{rec.gap_p75_s != null ? `${rec.gap_p75_s}s` : "—"}</TableCell>
                             <TableCell className="text-right text-sm">{rec.resume_count.toLocaleString()}</TableCell>
                             <TableCell className="text-right text-sm">
                               {rec.idle_waste_credits > 0 ? (

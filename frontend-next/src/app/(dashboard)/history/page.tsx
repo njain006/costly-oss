@@ -7,6 +7,7 @@ import DateRangePicker from "@/components/date-range-picker";
 import DemoBanner from "@/components/demo-banner";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import AccessHint from "@/components/access-hint";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,6 +161,7 @@ export default function QueryHistoryPage() {
                 ))}
               </TableBody>
             </Table>
+              {data.data.length === 0 && <AccessHint what="query history" denied={(data as { query_history_available?: boolean }).query_history_available === false} />}
 
             {/* Pagination */}
             {data.pages > 1 && (

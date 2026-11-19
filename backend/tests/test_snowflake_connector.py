@@ -361,6 +361,23 @@ class TestOrgUsagePreferredPath:
         assert by_svc["snowflake_snowpark_container_services"].category == CostCategory.compute
         assert by_svc["snowflake_snowpark_container_services"].cost_usd == 6.0
 
+    def test_cloud_services_adjustment_is_kept(self, sf_credentials):
+        """The negative 'adj for incl cloud services' row is the 10% free
+        allowance. Dropping it overstates the bill."""
+        rows = [
+            (date(2026, 3, 1), "ACCT", "CLOUD_SERVICES", "cloud services", 10.0, "credits", 30.0, "USD"),
+            (date(2026, 3, 1), "ACCT", "CLOUD_SERVICES", "adj for incl cloud services", -4.0, "credits", -12.0, "USD"),
+        ]
+        cursor = FakeCursor([
+            ("USAGE_IN_CURRENCY_DAILY", rows),
+            ("DATABASE_STORAGE_USAGE_HISTORY", []),
+            ("TABLE_STORAGE_METRICS", []),
+        ])
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        cs = [c for c in costs if c.service == "snowflake_cloud_services"]
+        assert round(sum(c.cost_usd for c in cs), 2) == 18.0
+
     def test_org_usage_preferred(self, sf_credentials):
         cursor = FakeCursor([
             ("USAGE_IN_CURRENCY_DAILY", self._org_rows()),
@@ -371,10 +388,10 @@ class TestOrgUsagePreferredPath:
         conn = _build_connector_with_cursor(sf_credentials, cursor)
         costs = conn.fetch_costs(days=7)
 
-        # 6 cost records from org usage (storage got 1 row — it is legal for
-        # USAGE_IN_CURRENCY_DAILY to have one storage row per day)
+        # 5 cost records from org usage: the STORAGE row is skipped because
+        # _fetch_storage prices storage per database (counting both doubles it)
         org_costs = [c for c in costs if c.metadata.get("source") == "ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY"]
-        assert len(org_costs) == 6
+        assert len(org_costs) == 5
 
         by_svc = {c.service: c for c in org_costs}
         # Compute
@@ -382,8 +399,7 @@ class TestOrgUsagePreferredPath:
         assert by_svc["snowflake_compute"].category == CostCategory.compute
         # Cloud services (no need to deduct 10% again — already billed USD)
         assert by_svc["snowflake_cloud_services"].cost_usd == 1.5
-        # Storage
-        assert by_svc["snowflake_storage"].category == CostCategory.storage
+        assert "snowflake_storage" not in by_svc
         # Serverless tasks
         assert by_svc["snowflake_serverless_tasks"].cost_usd == 6.0
         # Cortex AI = ai_inference category
@@ -769,6 +785,7 @@ class TestQueryAttribution:
 
     def test_attribution_recorded(self, sf_credentials):
         # Org usage empty => fallback path runs, then attribution on top.
+        sf_credentials.setdefault("pricing_overrides", {})["enable_attribution_drilldown"] = True
         cursor = FakeCursor([
             ("USAGE_IN_CURRENCY_DAILY", []),
             ("METERING_DAILY_HISTORY", []),
@@ -809,6 +826,7 @@ class TestQueryAttribution:
         assert bob.project is None
 
     def test_attribution_permission_denied_warns(self, sf_credentials):
+        sf_credentials.setdefault("pricing_overrides", {})["enable_attribution_drilldown"] = True
         cursor = FakeCursor([
             ("USAGE_IN_CURRENCY_DAILY", []),
             ("METERING_DAILY_HISTORY", []),
@@ -1015,6 +1033,7 @@ class TestStructuredErrors:
 class TestUnifiedCostCompliance:
 
     def test_all_records_valid(self, sf_credentials):
+        sf_credentials.setdefault("pricing_overrides", {})["enable_attribution_drilldown"] = True
         cursor = FakeCursor([
             (
                 "USAGE_IN_CURRENCY_DAILY",
@@ -1127,6 +1146,7 @@ class TestCombinedScenario:
             "credit_price_usd": 2.5,
             "storage_price_per_tb": 20.0,
         }
+        sf_credentials.setdefault("pricing_overrides", {})["enable_attribution_drilldown"] = True
         cursor = FakeCursor([
             (
                 "USAGE_IN_CURRENCY_DAILY",
@@ -1178,6 +1198,7 @@ class TestCombinedScenario:
     def test_mixed_warnings_still_returns_what_it_can(self, sf_credentials):
         """If some views are denied, we still return partial results and
         surface warnings — never silently empty."""
+        sf_credentials.setdefault("pricing_overrides", {})["enable_attribution_drilldown"] = True
         cursor = FakeCursor([
             ("USAGE_IN_CURRENCY_DAILY", Exception("SQL access control error: insufficient privileges")),
             (
@@ -1616,3 +1637,133 @@ class TestPricingConfigCortexModels:
             "pricing_overrides": {"enable_ai_services_drilldown": False}
         })
         assert cfg.enable_ai_services_drilldown is False
+
+
+class TestWarehouseSplit:
+    """Per-warehouse rows reconcile exactly to billed metering."""
+
+    def test_split_sums_to_metering_total(self, sf_credentials):
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        conn = _build_connector_with_cursor(sf_credentials, FakeCursor([]))
+        cur = FakeCursor([
+            ("METERING_DAILY_HISTORY", [("2026-03-01", "WAREHOUSE_METERING", 100.0, 5.0, -5.0, 100.0)]),
+            ("WAREHOUSE_METERING_HISTORY", [("2026-03-01", "A_WH", 30.0), ("2026-03-01", "B_WH", 10.0)]),
+        ])
+        rows = conn._fetch_metering_daily(cur, 7)
+        compute = {r.resource: r for r in rows if r.service == "snowflake_compute"}
+        assert set(compute) == {"A_WH", "B_WH"}
+        assert round(sum(r.usage_quantity for r in compute.values()), 4) == 100.0
+        assert compute["A_WH"].usage_quantity == 75.0
+
+    def test_no_split_data_falls_back_to_account_row(self, sf_credentials):
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        conn = _build_connector_with_cursor(sf_credentials, FakeCursor([]))
+        cur = FakeCursor([
+            ("METERING_DAILY_HISTORY", [("2026-03-01", "WAREHOUSE_METERING", 100.0, 0.0, 0.0, 100.0)]),
+            ("WAREHOUSE_METERING_HISTORY", Exception("boom")),
+        ])
+        rows = conn._fetch_metering_daily(cur, 7)
+        assert [r.resource for r in rows] == ["Warehouse compute"]
+
+
+class TestAiCreditPricing:
+    def test_ai_types_use_ai_price(self):
+        p = PricingConfig.from_credentials({"pricing_overrides": {"credit_price": 3.0, "ai_credit_price": 2.0}})
+        assert p.credit_price_for_service_type("AI_FUNCTIONS") == 2.0
+        assert p.credit_price_for_service_type("SNOWFLAKE_COCO_SNOWSIGHT") == 2.0
+        assert p.credit_price_for_service_type("WAREHOUSE_METERING") == 3.0
+        assert p.credit_price_for_service_type("TRUST_CENTER") == 3.0
+
+    def test_ai_defaults_to_compute_price(self):
+        p = PricingConfig.from_credentials({"pricing_overrides": {"credit_price": 3.0}})
+        assert p.credit_price_for_service_type("AI_FUNCTIONS") == 3.0
+
+    def test_service_override_wins(self):
+        p = PricingConfig.from_credentials({"pricing_overrides": {
+            "ai_credit_price": 2.0, "service_type_prices": {"AI_FUNCTIONS": 1.5}}})
+        assert p.credit_price_for_service_type("AI_FUNCTIONS") == 1.5
+
+
+class TestOrgUsageWarehouseSplit:
+    def test_multiple_usage_types_merge_before_split(self, sf_credentials):
+        """Two WAREHOUSE_METERING usage types on one day must not overwrite
+        each other's per-warehouse rows."""
+        conn = _build_connector_with_cursor(sf_credentials, FakeCursor([]))
+        cur = FakeCursor([
+            ("USAGE_IN_CURRENCY_DAILY", [
+                (date(2026, 3, 1), "ACCT", "WAREHOUSE_METERING", "compute", 8.0, "credits", 24.0, "USD"),
+                (date(2026, 3, 1), "ACCT", "WAREHOUSE_METERING", "compute gen2", 2.0, "credits", 6.0, "USD"),
+            ]),
+            ("WAREHOUSE_METERING_HISTORY", [("2026-03-01", "A_WH", 3.0), ("2026-03-01", "B_WH", 1.0)]),
+        ])
+        rows = conn._fetch_org_usage(cur, 7)
+        by_wh = {r.resource: r for r in rows}
+        assert set(by_wh) == {"A_WH", "B_WH"}
+        assert round(sum(r.cost_usd for r in rows), 2) == 30.0
+        assert by_wh["A_WH"].cost_usd == 22.5
+
+
+class TestServerlessNotDroppedOnFallback:
+    def test_serverless_kept_when_only_warehouse_metering(self, sf_credentials):
+        """If METERING_DAILY_HISTORY is unreadable, the warehouse-only fallback
+        has no serverless, so serverless rows must stay in the totals."""
+        sf_credentials["pricing_overrides"] = {"prefer_org_usage": False}
+        cursor = FakeCursor([
+            ("METERING_DAILY_HISTORY", Exception("Object does not exist or not authorized")),
+            ("WAREHOUSE_METERING_HISTORY", [("2026-03-01", "A_WH", 4.0, 0.5)]),
+            ("SERVERLESS_TASK_HISTORY", [("2026-03-01", "MY_TASK", 2.0)]),
+        ])
+        conn = _build_connector_with_cursor(sf_credentials, cursor)
+        costs = conn.fetch_costs(days=7)
+        tasks = [c for c in costs if c.service == "snowflake_serverless_tasks"]
+        assert tasks, "serverless task row missing"
+        assert not any((c.metadata or {}).get("drilldown") for c in tasks)
+
+
+class _FakeProgrammingError(Exception):
+    def __init__(self, msg="x", errno=None):
+        super().__init__(msg)
+        self.errno = errno
+
+
+class TestTolerantCursor:
+    """The connector package is stubbed in unit tests (conftest), so swap in
+    a real exception class for the one the cursor catches."""
+
+    @pytest.fixture(autouse=True)
+    def _real_error_class(self, monkeypatch):
+        import app.services.snowflake as svc
+        monkeypatch.setattr(svc.snowflake.connector.errors, "ProgrammingError", _FakeProgrammingError)
+
+    @staticmethod
+    def _cursor(exc):
+        from app.services.snowflake import _TolerantCursor
+
+        class Raw:
+            def execute(self, sql, *a, **k):
+                raise exc
+
+        missing, timed_out = set(), set()
+        return _TolerantCursor(Raw(), missing, timed_out), missing, timed_out
+
+    @staticmethod
+    def _err(errno, msg="x"):
+        return _FakeProgrammingError(msg=msg, errno=errno)
+
+    def test_denied_select_is_tolerated_and_recorded(self):
+        cur, missing, _ = self._cursor(self._err(
+            2003, "Object 'SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY' does not exist or not authorized."))
+        cur.execute("SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY")
+        assert cur.fetchall() == []
+        assert missing == {"SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY"}
+
+    def test_timeout_is_tolerated_and_recorded(self):
+        cur, _, timed_out = self._cursor(self._err(604))
+        cur.execute("SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY")
+        assert cur.fetchall() == []
+        assert timed_out == {"SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY"}
+
+    def test_write_always_raises(self):
+        cur, _, _ = self._cursor(self._err(2003))
+        with pytest.raises(_FakeProgrammingError):
+            cur.execute("ALTER WAREHOUSE X SET AUTO_SUSPEND = 60 -- ACCOUNT_USAGE.")

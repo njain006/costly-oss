@@ -121,12 +121,14 @@ def test_org_usage_path_emits_one_record_per_service_type():
         c for c in costs
         if c.metadata.get("source") == "ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY"
     ]
-    assert len(org_costs) == 4
+    # STORAGE is skipped here: _fetch_storage prices it per database, and
+    # counting both would double it.
+    assert len(org_costs) == 3
 
     by_service = {c.service: c for c in org_costs}
     assert by_service["snowflake_compute"].cost_usd == 37.5
     assert by_service["snowflake_compute"].category == CostCategory.compute
-    assert by_service["snowflake_storage"].category == CostCategory.storage
+    assert "snowflake_storage" not in by_service
     assert by_service["snowflake_cortex"].category == CostCategory.ai_inference
     assert by_service["snowflake_snowpipe"].category == CostCategory.ingestion
     assert conn.warnings == []

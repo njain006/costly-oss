@@ -2,8 +2,11 @@
 
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
+import api from "@/lib/api";
+import { useState } from "react";
 import DateRangePicker from "@/components/date-range-picker";
 import DemoBanner from "@/components/demo-banner";
+import ReviewSummary from "@/components/review-summary";
 import DataFreshness from "@/components/data-freshness";
 import StatCard from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,15 +26,21 @@ interface DashboardData {
   query_count: number;
   failed_queries: number;
   storage_gb: number;
+  query_history_available?: boolean;
+  queries_source?: string;
   cost_trend: Array<{
     date: string;
     cost: number;
     compute_cost: number;
     cloud_services_cost: number;
+    serverless_cost?: number;
+    ai_cost?: number;
     rolling_avg?: number;
   }>;
   top_warehouses: Array<{ name: string; credits: number; cost: number }>;
-  top_users: Array<{ user: string; cost: number; queries: number }>;
+  top_users: Array<{ user: string; cost: number; queries: number; type?: "service" | "human"; type_source?: string }>;
+  cost_by_user_type?: { service: number; human: number };
+  connection_id?: string;
   anomalies: Array<{ date: string; cost: number; label: string }>;
   fetched_at?: string;
   cached?: boolean;
@@ -40,6 +49,8 @@ interface DashboardData {
 
 export default function DashboardPage() {
   const { days, refreshTrigger } = useDateRange();
+  // Local overrides so a click flips the badge immediately.
+  const [typeOverride, setTypeOverride] = useState<Record<string, "service" | "human">>({});
   const { data, loading } = useApi<DashboardData>(
     `/dashboard?days=${days}&refresh=${refreshTrigger > 0}`,
     [days, refreshTrigger]
@@ -65,13 +76,21 @@ export default function DashboardPage() {
         </div>
       ) : data ? (
         <>
+          <ReviewSummary
+            totalCost={data.total_cost}
+            days={days}
+            trend={data.cost_trend}
+            topWarehouse={data.top_warehouses[0]}
+            serviceShare={data.cost_by_user_type && (data.cost_by_user_type.service + data.cost_by_user_type.human) > 0
+              ? (100 * data.cost_by_user_type.service) / (data.cost_by_user_type.service + data.cost_by_user_type.human)
+              : undefined}
+          />
           {/* Stat Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
-            <StatCard title="Total Cost" value={formatCurrency(data.total_cost)} icon={DollarSign} description={`${days}d period`} />
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
             <StatCard title="Credits" value={formatNumber(data.total_credits)} icon={CreditCard} />
             <StatCard title="Warehouses" value={data.active_warehouses} icon={Warehouse} />
-            <StatCard title="Queries" value={formatNumber(data.query_count)} icon={Zap} />
-            <StatCard title="Failed" value={formatNumber(data.failed_queries)} icon={AlertTriangle} />
+            <StatCard title="Queries" value={formatNumber(data.query_count)} icon={Zap} description={data.queries_source === "query_attribution" ? "warehouse queries over ~100ms" : undefined} />
+            <StatCard title="Failed" value={data.query_history_available === false ? "—" : formatNumber(data.failed_queries)} icon={AlertTriangle} description={data.query_history_available === false ? "needs query history access" : undefined} />
             <StatCard title="Storage" value={`${data.storage_gb >= 1000 ? (data.storage_gb / 1000).toFixed(1) + " TB" : data.storage_gb.toFixed(1) + " GB"}`} icon={HardDrive} />
           </div>
 
@@ -92,6 +111,8 @@ export default function DashboardPage() {
                       <Tooltip formatter={(v) => formatCurrency(Number(v))} />
                       <Area type="monotone" dataKey="compute_cost" stackId="1" fill={COLORS.primary} stroke={COLORS.primary} fillOpacity={0.6} name="Compute" />
                       <Area type="monotone" dataKey="cloud_services_cost" stackId="1" fill={COLORS.chart[4]} stroke={COLORS.chart[4]} fillOpacity={0.4} name="Cloud Services" />
+                      <Area type="monotone" dataKey="ai_cost" stackId="1" fill={COLORS.chart[2]} stroke={COLORS.chart[2]} fillOpacity={0.5} name="AI (Cortex, Copilot)" />
+                      <Area type="monotone" dataKey="serverless_cost" stackId="1" fill={COLORS.chart[3]} stroke={COLORS.chart[3]} fillOpacity={0.5} name="Serverless & other" />
                       {data.anomalies.map((a) => (
                         <ReferenceLine key={a.date} x={a.date} stroke="#ef4444" strokeDasharray="3 3" label={{ value: "!", fill: "#ef4444", fontSize: 12 }} />
                       ))}
@@ -112,7 +133,7 @@ export default function DashboardPage() {
                     <BarChart data={data.top_warehouses} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                       <XAxis type="number" tick={{ fontSize: 11 }} />
-                      <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={100} />
+                      <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={150} />
                       <Tooltip formatter={(v) => `${Number(v).toFixed(1)} credits`} />
                       <Bar dataKey="credits" fill={COLORS.primary} radius={[0, 4, 4, 0]} />
                     </BarChart>
@@ -122,10 +143,9 @@ export default function DashboardPage() {
             </Card>
           </div>
 
-          {/* Anomalies + Top Users */}
-          <div className="grid lg:grid-cols-2 gap-6">
-            {data.anomalies.length > 0 && (
-              <Card>
+          {/* Top Users (anomalies are summarised at the top and on the Anomalies page) */}
+          <div className="grid gap-6">
+            <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 text-red-500" />
@@ -152,19 +172,43 @@ export default function DashboardPage() {
                 <CardTitle className="text-base">Top Users by Cost</CardTitle>
               </CardHeader>
               <CardContent>
+                {data.cost_by_user_type && (
+                  <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
+                    <span>Service accounts: <b className="text-slate-800">{formatCurrency(data.cost_by_user_type.service)}</b></span>
+                    <span>People: <b className="text-slate-800">{formatCurrency(data.cost_by_user_type.human)}</b></span>
+                    <span className="ml-auto">click a tag to correct it</span>
+                  </div>
+                )}
                 <div className="space-y-2">
-                  {data.top_users.map((u, i) => (
+                  {data.top_users.map((u, i) => {
+                    const t = typeOverride[u.user] ?? u.type ?? "human";
+                    const flip = async () => {
+                      const next = t === "service" ? "human" : "service";
+                      setTypeOverride((o) => ({ ...o, [u.user]: next }));
+                      if (data.connection_id) {
+                        try { await api.put(`/platforms/${data.connection_id}/user-types`, { user: u.user, type: next }); } catch { /* keep local */ }
+                      }
+                    };
+                    return (
                     <div key={u.user} className="flex items-center justify-between py-2 border-b last:border-0">
                       <div className="flex items-center gap-3">
                         <span className="text-xs font-medium text-muted-foreground w-5">{i + 1}</span>
                         <span className="text-sm font-medium">{u.user}</span>
+                        <button
+                          onClick={flip}
+                          title={u.type_source === "guess" && !typeOverride[u.user] ? "Guessed from the name. Click to change." : "Click to change."}
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${t === "service" ? "bg-slate-100 text-slate-600 border-slate-200" : "bg-sky-50 text-sky-700 border-sky-200"}`}
+                        >
+                          {t === "service" ? "service" : "person"}{u.type_source === "guess" && !typeOverride[u.user] ? "?" : ""}
+                        </button>
                       </div>
                       <div className="text-right">
                         <div className="text-sm font-semibold">{formatCurrency(u.cost)}</div>
                         <div className="text-xs text-muted-foreground">{formatNumber(u.queries)} queries</div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

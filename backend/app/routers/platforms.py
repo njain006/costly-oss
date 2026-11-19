@@ -220,6 +220,29 @@ class PricingOverrideRequest(BaseModel):
     pricing_overrides: dict
 
 
+class UserTypeRequest(BaseModel):
+    user: str
+    type: str  # "service" | "human" | "auto"
+
+
+@router.put("/{connection_id}/user-types")
+async def set_user_type(connection_id: str, body: UserTypeRequest, user_id: str = Depends(get_current_user)):
+    """Mark a warehouse user as a service account or a human. "auto" removes
+    the override and falls back to Snowflake's user type or the name guess."""
+    from bson import ObjectId
+    if body.type not in ("service", "human", "auto"):
+        raise HTTPException(400, "type must be service, human or auto")
+    key = f"user_types.{body.user.upper().replace('.', '_')}"
+    update = {"$unset": {key: ""}} if body.type == "auto" else {"$set": {key: body.type}}
+    res = await db.platform_connections.update_one({"_id": ObjectId(connection_id), "user_id": user_id}, update)
+    if not res.matched_count:
+        raise HTTPException(404, "Connection not found")
+    from app.services.cache import cache
+    for k in ("dashboard:7", "dashboard:14", "dashboard:30", "dashboard:90"):
+        cache.delete(f"{user_id}:{k}")
+    return {"success": True}
+
+
 @router.put("/{connection_id}/pricing")
 async def set_pricing(
     connection_id: str,

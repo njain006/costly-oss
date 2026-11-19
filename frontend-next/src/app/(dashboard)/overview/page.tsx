@@ -51,9 +51,9 @@ interface UnifiedCosts {
   days: number;
   by_platform: { platform: string; cost: number }[];
   by_category: { category: string; cost: number }[];
-  by_service: { service: string; platform: string; cost: number; trend: number }[];
-  daily_trend: { date: string; cost: number; aws: number; snowflake: number; openai: number; other: number }[];
-  top_resources: { platform: string; resource: string; cost: number; usage: number; trend: number }[];
+  by_service: { service: string; platform: string; cost: number; trend: number | null }[];
+  daily_trend: Array<{ date: string; cost: number } & Record<string, number | string>>;
+  top_resources: { platform: string; resource: string; cost: number; usage: number; trend: number | null }[];
   by_account?: {
     platform: string;
     connection_id: string | null;
@@ -220,7 +220,31 @@ function scaleDemoData(days: number) {
 
 // ─── Subcomponents ────────────────────────────────────────────────────────────
 
-function TrendBadge({ pct }: { pct: number }) {
+const SERVICE_NAMES: Record<string, string> = {
+  snowflake_compute: "Warehouse compute",
+  snowflake_cloud_services: "Cloud services",
+  snowflake_cortex: "Cortex AI functions",
+  snowflake_copilot: "Copilot (Cortex Code)",
+  snowflake_trust_center: "Trust Center",
+  snowflake_storage: "Storage",
+  snowflake_snowpark_container_services: "Snowpark Container Services",
+  snowflake_event_tables: "Event tables / telemetry",
+  snowflake_copy_files: "Copy files",
+  snowflake_query_acceleration: "Query acceleration",
+  snowflake_serverless_tasks: "Serverless tasks",
+  snowflake_snowpipe: "Snowpipe",
+  snowflake_auto_clustering: "Automatic clustering",
+};
+
+function serviceName(slug: string): string {
+  if (SERVICE_NAMES[slug]) return SERVICE_NAMES[slug];
+  const rest = slug.includes("_") ? slug.slice(slug.indexOf("_") + 1) : slug;
+  const s = rest.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function TrendBadge({ pct }: { pct: number | null | undefined }) {
+  if (pct == null || !Number.isFinite(pct)) return <span className="text-xs text-slate-300">—</span>;
   if (Math.abs(pct) < 0.5) return <span className="flex items-center gap-0.5 text-xs text-slate-400"><Minus className="h-3 w-3" /> —</span>;
   if (pct > 0)
     return <span className="flex items-center gap-0.5 text-xs text-red-500 font-medium"><ArrowUp className="h-3 w-3" />{pct.toFixed(1)}%</span>;
@@ -344,6 +368,14 @@ export default function OverviewPage() {
   const aiCost = data.by_category.find((c) => c.category === "ai_inference")?.cost ?? 0;
   const aiPct = data.total_cost > 0 ? (aiCost / data.total_cost) * 100 : 0;
 
+  const topCategory = data.by_category[0];
+  const CATEGORY_LABELS: Record<string, string> = {
+    compute: "Compute", ai_inference: "AI", storage: "Storage", ingestion: "Ingestion",
+    networking: "Networking", orchestration: "Orchestration", transformation: "Transformation",
+  };
+  const platformKeys = data.by_platform.map((p) => p.platform);
+  const hasAiPlatform = !!aiCosts?.kpis && (aiCosts.kpis.cache_hit_rate > 0 || aiCosts.kpis.cache_savings_usd > 0);
+
   const firstHalf = data.daily_trend.slice(0, Math.floor(data.daily_trend.length / 2));
   const secondHalf = data.daily_trend.slice(Math.floor(data.daily_trend.length / 2));
   const firstHalfTotal = firstHalf.reduce((s, d) => s + d.cost, 0);
@@ -396,17 +428,26 @@ export default function OverviewPage() {
           icon={Bot}
           description={`${aiPct.toFixed(1)}% of total`}
         />
-        <StatCard
-          title="Cache Hit Rate"
-          value={aiCosts?.kpis ? `${aiCosts.kpis.cache_hit_rate.toFixed(1)}%` : "—"}
-          icon={Activity}
-          description={aiCosts?.kpis ? `~${formatCurrency(aiCosts.kpis.cache_savings_usd)} saved` : "No AI data yet"}
-        />
+        {hasAiPlatform ? (
+          <StatCard
+            title="Cache Hit Rate"
+            value={`${aiCosts!.kpis.cache_hit_rate.toFixed(1)}%`}
+            icon={Activity}
+            description={`~${formatCurrency(aiCosts!.kpis.cache_savings_usd)} saved`}
+          />
+        ) : (
+          <StatCard
+            title="Top Service"
+            value={data.by_service[0] ? serviceName(data.by_service[0].service) : "—"}
+            icon={Activity}
+            description={data.by_service[0] ? formatCurrency(data.by_service[0].cost) : ""}
+          />
+        )}
         <StatCard
           title="Top Category"
-          value="AI Inference"
+          value={topCategory ? (CATEGORY_LABELS[topCategory.category] ?? topCategory.category) : "—"}
           icon={Zap}
-          description={formatCurrency(aiCost)}
+          description={topCategory ? `${formatCurrency(topCategory.cost)} · ${((topCategory.cost / (data.total_cost || 1)) * 100).toFixed(0)}%` : ""}
         />
         <StatCard
           title="Period Trend"
@@ -450,14 +491,10 @@ export default function OverviewPage() {
                   iconSize={8}
                   wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
                 />
-                <Area type="monotone" dataKey="aws" name="AWS" stackId="1"
-                  stroke={COLORS.chart[0]} fill={COLORS.chart[0]} fillOpacity={0.8} />
-                <Area type="monotone" dataKey="snowflake" name="Snowflake" stackId="1"
-                  stroke={COLORS.chart[1]} fill={COLORS.chart[1]} fillOpacity={0.8} />
-                <Area type="monotone" dataKey="openai" name="OpenAI" stackId="1"
-                  stroke={COLORS.chart[2]} fill={COLORS.chart[2]} fillOpacity={0.8} />
-                <Area type="monotone" dataKey="other" name="Other" stackId="1"
-                  stroke={COLORS.chart[3]} fill={COLORS.chart[3]} fillOpacity={0.6} />
+                {platformKeys.map((key, i) => (
+                  <Area key={key} type="monotone" dataKey={key} name={PLATFORM_LABELS[key] || key} stackId="1"
+                    stroke={COLORS.chart[i % COLORS.chart.length]} fill={COLORS.chart[i % COLORS.chart.length]} fillOpacity={0.7} />
+                ))}
               </AreaChart>
             </ResponsiveContainer>
           </CardContent>
@@ -570,7 +607,7 @@ export default function OverviewPage() {
               </div>
               {data.by_service.map((s, i) => (
                 <div key={i} className="grid grid-cols-12 items-center py-2 border-b border-slate-50 last:border-0 text-sm">
-                  <span className="col-span-5 text-slate-800 font-medium truncate pr-2">{s.service}</span>
+                  <span className="col-span-5 text-slate-800 font-medium truncate pr-2" title={s.service}>{serviceName(s.service)}</span>
                   <span className="col-span-3 text-slate-500 text-xs truncate">{PLATFORM_LABELS[s.platform] || s.platform}</span>
                   <span className="col-span-2 text-right font-semibold text-slate-800">{formatCurrency(s.cost)}</span>
                   <span className="col-span-2 flex justify-end"><TrendBadge pct={s.trend} /></span>
@@ -670,7 +707,6 @@ export default function OverviewPage() {
                     <div className="text-sm font-medium text-slate-900 truncate">{r.resource}</div>
                     <div className="text-xs text-slate-400">
                       {PLATFORM_LABELS[r.platform] || r.platform}
-                      {r.usage > 0 && ` · ${formatNumber(r.usage)} units`}
                     </div>
                   </div>
 
