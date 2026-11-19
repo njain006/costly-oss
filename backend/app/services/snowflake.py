@@ -19,8 +19,10 @@ def build_sf_connection(conn_doc: dict):
         "database": conn_doc["database"],
         "schema": conn_doc["schema_name"],
         "login_timeout": 15,
-        # ACCOUNT_USAGE scans can take minutes on large accounts.
-        "network_timeout": 180,
+        # ACCOUNT_USAGE scans can take minutes on large accounts (30 days of
+        # QUERY_HISTORY on an X-Small, several pages at once). Giving up early
+        # wastes the credits Snowflake already spent, so wait up to 10 min.
+        "network_timeout": 600,
         # ACCOUNT_USAGE timestamps are TIMESTAMP_LTZ; Snowflake bills by UTC
         # day. Pin the session to UTC so daily buckets match the invoice and
         # ORGANIZATION_USAGE no matter what the account default timezone is.
