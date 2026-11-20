@@ -12,8 +12,9 @@
 
 ```bash
 git clone https://github.com/njain006/costly-oss && cd costly-oss
-cp backend/.env.example backend/.env   # add your LLM API key
-docker compose up -d                    # open http://localhost:3000
+./scripts/setup.sh                      # creates backend/.env with fresh secrets
+docker compose up -d                    # open http://localhost:3000, sign up
+# optional: add an LLM API key to backend/.env for the AI agent
 ```
 
 ## What it does
@@ -118,10 +119,11 @@ SMTP_PASSWORD=<your-app-password>
 ### 2. Run with Docker Compose
 
 ```bash
-docker compose up -d
+docker compose up -d                  # local: http://localhost:3000
+docker compose --profile prod up -d   # public host: also starts nginx (TLS)
 ```
 
-This starts 5 containers:
+This starts these containers:
 
 | Service | Port | Description |
 |---------|------|-------------|
@@ -129,7 +131,7 @@ This starts 5 containers:
 | backend | 8000 | FastAPI API |
 | mongodb | 27017 | Database |
 | redis | 6379 | Cache |
-| nginx | 80/443 | Reverse proxy |
+| nginx | 80/443 | Reverse proxy (`--profile prod` only) |
 
 ### 3. Open the app
 

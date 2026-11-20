@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pymongo import ASCENDING, DESCENDING
 
 from app.database import db
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.services.snowflake import get_credit_price
 from app.services.query_sync import sync_query_history_to_mongo
 from app.utils.constants import CREDITS_MAP
@@ -24,9 +24,11 @@ limiter = Limiter(key_func=get_remote_address)
 def _build_filter(user_id: str, days: int, warehouse: Optional[str], user_name: Optional[str],
                    status: Optional[str], query_type: Optional[str], min_duration_s: Optional[float],
                    max_duration_s: Optional[float], database: Optional[str], has_spill: Optional[bool],
-                   query_text_search: Optional[str]) -> dict:
+                   query_text_search: Optional[str], connection_id: Optional[str] = None) -> dict:
     since = datetime.utcnow() - timedelta(days=days)
     filt: dict = {"user_id": user_id, "end_time": {"$gte": since}}
+    if connection_id:
+        filt["connection_id"] = connection_id
     if warehouse:
         filt["warehouse_name"] = warehouse
     if user_name:
@@ -56,9 +58,10 @@ def _build_filter(user_id: str, days: int, warehouse: Optional[str], user_name: 
 async def manual_sync_queries(
     request: Request,
     days: int = Query(7, ge=1, le=90),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     if not source:
         raise HTTPException(400, "No active Snowflake connection. Add one in Settings.")
     try:
@@ -84,10 +87,10 @@ async def history_queries(
     sort_by: str = Query("total_elapsed_ms"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
     filt = _build_filter(user_id, days, warehouse, user_name, status, query_type,
-                          min_duration_s, max_duration_s, database, has_spill, query_text_search)
+                          min_duration_s, max_duration_s, database, has_spill, query_text_search, connection_id)
 
     sort_dir = DESCENDING
     valid_sorts = {"total_elapsed_ms", "bytes_scanned", "credits_cloud_svc", "end_time", "cost_usd"}
@@ -154,8 +157,9 @@ async def history_stats(user_id: str = Depends(get_current_user)):
 
 
 @router.post("/api/sync/enrich-costs")
-async def enrich_costs(user_id: str = Depends(get_current_user)):
-    source = await get_data_source(user_id)
+async def enrich_costs(connection_id: str | None = Query(None), user_id: str = Depends(get_current_user)):
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     credit_price = await get_credit_price(source) if source else 3.0
 
     cursor = db.query_history.find(
@@ -194,10 +198,10 @@ async def export_query_history(
     database: Optional[str] = Query(None),
     has_spill: Optional[bool] = Query(None),
     query_text_search: Optional[str] = Query(None),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
     filt = _build_filter(user_id, days, warehouse, user_name, status, query_type,
-                          min_duration_s, max_duration_s, database, has_spill, query_text_search)
+                          min_duration_s, max_duration_s, database, has_spill, query_text_search, connection_id)
 
     cursor = db.query_history.find(filt, {"_id": 0}).sort("end_time", DESCENDING).limit(10000)
     rows = await cursor.to_list(10000)

@@ -1,13 +1,13 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from typing import Optional
 
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.services.agent import run_agent, run_agent_stream
 from app.services.chat_sessions import (
     create_session, load_session_messages, append_messages,
@@ -82,12 +82,13 @@ class SessionSummary(BaseModel):
 async def chat(
     request: Request,
     body: ChatRequest,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
     if not body.messages:
         raise HTTPException(400, "Messages cannot be empty")
 
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     credit_price = 3.0
     if source:
         credit_price = await get_credit_price(source)
@@ -136,12 +137,13 @@ async def chat(
 async def chat_stream(
     request: Request,
     body: ChatStreamRequest,
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
     if not body.messages:
         raise HTTPException(400, "Messages cannot be empty")
 
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     credit_price = 3.0
     if source:
         credit_price = await get_credit_price(source)

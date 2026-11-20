@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
-from app.deps import get_current_user, get_data_source
+from app.deps import cache_scope, get_current_user, get_data_source
 from app.services.cache import cache
 from app.services.snowflake import sync_storage
 
@@ -16,18 +16,19 @@ router = APIRouter(tags=["storage"])
 async def storage(
     days: int = Query(30, ge=1, le=365),
     refresh: bool = Query(False),
-    user_id: str = Depends(get_current_user),
+    connection_id: str | None = Query(None), user_id: str = Depends(get_current_user),
 ):
-    source = await get_data_source(user_id)
+    source = await get_data_source(user_id, connection_id)
+    scope = cache_scope(user_id, source)
     fetched_at = datetime.utcnow().isoformat()
     if not source:
         return {"tables": [], "total_gb": 0, "storage_cost_monthly": 0, "trend": [], "by_database": [], "fetched_at": fetched_at, "demo": True}
-    cache_key = f"{user_id}:storage:{days}"
+    cache_key = f"{scope}:storage:{days}"
     if refresh:
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     result = await run_in_thread(sync_storage, source, days)
     cache.set(cache_key, result, CACHE_TTL["storage"])
     return {**result, "fetched_at": fetched_at}

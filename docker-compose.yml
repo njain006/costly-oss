@@ -39,7 +39,9 @@ services:
       context: ./frontend-next
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      # Local only by default. To serve other machines, put it behind the
+      # nginx service (docker compose --profile prod up -d) with TLS.
+      - "127.0.0.1:3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
@@ -47,6 +49,9 @@ services:
     restart: unless-stopped
 
   nginx:
+    # Production reverse proxy with TLS; needs a domain and certificates
+    # (see docs/deployment.md). Not started by a plain `docker compose up`.
+    profiles: ["prod"]
     image: nginx:alpine
     ports:
       - "80:80"

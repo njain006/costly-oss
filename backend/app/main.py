@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta
 
 import redis as sync_redis
@@ -27,7 +29,7 @@ _redis_lock_client = None
 def _get_redis_for_lock():
     global _redis_lock_client
     if _redis_lock_client is None:
-        _redis_lock_client = sync_redis.from_url("redis://redis:6379", decode_responses=True)
+        _redis_lock_client = sync_redis.from_url(settings.redis_url, decode_responses=True)
     return _redis_lock_client
 
 
@@ -59,6 +61,42 @@ async def _locked_sync_query_history():
         await sync_all_users_query_history()
     finally:
         r.delete("costly:lock:sync_query_history")
+
+
+logger = logging.getLogger(__name__)
+
+# Delete / extend a lock only while it still holds our token, so a run never
+# frees or keeps alive a lock that a newer run took over.
+_RELEASE_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+_RENEW_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) end return 0"
+
+
+async def _locked_prewarm():
+    """A run can outlast any fixed lock TTL (many accounts, slow queries), so
+    the lock is short and renewed while the run is alive. A killed run
+    frees it within 15 minutes; a live one never lets a second run
+    start and double the warehouse spend."""
+    import uuid
+    from app.services.prewarm import prewarm_snowflake_pages
+    key, ttl, token = "costly:lock:prewarm", 900, uuid.uuid4().hex
+    r = _get_redis_for_lock()
+    if not r.set(key, token, nx=True, ex=ttl):
+        return
+
+    async def _renew():
+        while True:
+            await asyncio.sleep(ttl / 3)
+            try:
+                r.eval(_RENEW_IF_OWNER, 1, key, token, ttl)
+            except Exception:
+                logger.warning("prewarm: lock renew failed", exc_info=True)
+
+    renewer = asyncio.create_task(_renew())
+    try:
+        await prewarm_snowflake_pages()
+    finally:
+        renewer.cancel()
+        r.eval(_RELEASE_IF_OWNER, 1, key, token)
 
 
 async def _locked_sync_costs():
@@ -125,8 +163,10 @@ app.include_router(optimization.router)
 app.include_router(admin.router)
 app.include_router(public_demo.router)
 app.include_router(chat.router)
-app.include_router(platform_views.router)
+# platforms first: platform_views' catch-all /{platform_key}/{view_slug}
+# would otherwise answer /{connection_id}/pricing and friends with demo data.
 app.include_router(platforms.router)
+app.include_router(platform_views.router)
 app.include_router(anomalies.router)
 app.include_router(teams.router)
 app.include_router(settings_router.router)
@@ -157,6 +197,15 @@ async def startup_event():
         run_date=datetime.utcnow() + timedelta(seconds=120),
         id="platform_cost_boot",
     )
+    # Precompute Snowflake pages so they open instantly (services/prewarm.py)
+    if settings.prewarm_interval_hours > 0:
+        _scheduler.add_job(_locked_prewarm, "interval", hours=settings.prewarm_interval_hours,
+                           id="snowflake_prewarm")
+        _scheduler.add_job(
+            _locked_prewarm, "date",
+            run_date=datetime.utcnow() + timedelta(seconds=30),
+            id="snowflake_prewarm_boot",
+        )
     _scheduler.add_job(
         _locked_cost_digest, "cron",
         hour=9, minute=0, id="daily_cost_digest",

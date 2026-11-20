@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useApi } from "@/hooks/use-api";
+import SfAccountSwitcher from "@/components/sf-account-switcher";
 import { PLATFORM_REGISTRY, getViewPath, isPathInPlatform, type PlatformRegistryEntry } from "@/lib/platform-registry";
 
 interface SidebarSection {
@@ -35,7 +36,7 @@ export default function Sidebar() {
   const { user, isDemo, logout, exitDemo } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
-  const { data: connections } = useApi<{ id: string; platform?: string }[]>(
+  const { data: connections } = useApi<{ id: string; platform?: string; name?: string }[]>(
     !isDemo && user ? "/platforms" : null
   );
   const { data: sfStatus } = useApi<{ has_connection: boolean }>(
@@ -204,6 +205,11 @@ export default function Sidebar() {
               </button>
 
               {/* Section views */}
+              {isExpanded && entry.key === "snowflake" && (
+                <SfAccountSwitcher
+                  accounts={(connections ?? []).filter((c) => c.platform === "snowflake").map((c) => ({ id: c.id, name: c.name ?? c.id }))}
+                />
+              )}
               {isExpanded && (
                 <div className="mt-0.5 space-y-0.5">
                   {entry.views.map((view) => {
