@@ -32,3 +32,6 @@ hypothesis>=6.100.0
 pytest-recording>=0.13.0
 databricks-sql-connector>=3.0.0
 python-multipart>=0.0.9
+# In-memory MongoDB / Redis for tests that exercise routers and locks
+mongomock-motor>=0.0.29
+fakeredis[lua]>=2.20.0
