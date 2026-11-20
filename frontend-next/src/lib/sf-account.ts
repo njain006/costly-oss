@@ -41,7 +41,7 @@ export function subscribeSfAccount(l: () => void): () => void {
 const SNOWFLAKE_PATHS = [
   "/dashboard", "/costs", "/cost-attribution", "/queries", "/storage", "/stale-tables",
   "/warehouses", "/spillage", "/query-patterns", "/workloads", "/recommendations",
-  "/history", "/optimization", "/chat",
+  "/history", "/optimization", "/chat", "/sync",
 ];
 
 export function withSfAccount(url: string, account: string): string {

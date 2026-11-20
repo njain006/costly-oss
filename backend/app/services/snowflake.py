@@ -1355,7 +1355,7 @@ def sync_warehouse_sizing(conn_doc: dict, days: int, credit_price: float) -> dic
             # hour, a size down can slow queries. No headline saving.
             "monthly_savings": 0.0,
             "savings_upper_bound": upper_savings,
-            "ddl_command": f"ALTER WAREHOUSE {quote_ident(wh_name)} SET WAREHOUSE_SIZE = '{display.get(recommended, recommended).replace('-', '').upper()}';" if needs_change else None,
+            "ddl_command": f"ALTER WAREHOUSE {quote_ident(wh_name)} SET WAREHOUSE_SIZE = '{display.get(recommended, recommended).upper()}';" if needs_change else None,
             "reason": findings[0]["title"] if findings else "Healthy: no queueing, no spill, no slow-query pattern",
             "needs_change": needs_change,
         })
@@ -1465,12 +1465,19 @@ def looks_like_service_account(name: str) -> bool:
     return bool(tokens & _SERVICE_NAME_TOKENS) or any(s in flat for s in _SERVICE_NAME_SUBSTRINGS)
 
 
+def user_type_key(name) -> str:
+    """Key for a user in a connection's `user_types` map. MongoDB field names
+    can't contain dots, so both the writer (PUT /user-types) and the reader
+    here must encode names the same way."""
+    return str(name).upper().replace(".", "_")
+
+
 def classify_users(cur, conn_doc: dict, names: list) -> dict:
     """{user: (type, source)} with type 'service' | 'human'.
 
     Order: manual override on the connection (`user_types`), then Snowflake
     USERS.TYPE / login name (needs SECURITY_VIEWER), then a name heuristic."""
-    manual = {str(k).upper(): v for k, v in (conn_doc.get("user_types") or {}).items()}
+    manual = {user_type_key(k): v for k, v in (conn_doc.get("user_types") or {}).items()}
     out: dict = {}
     sf_info: dict = {}
     if names:
@@ -1480,7 +1487,7 @@ def classify_users(cur, conn_doc: dict, names: list) -> dict:
         """)
         sf_info = {r[0]: r[1:] for r in cur.fetchall()}
     for n in names:
-        key = str(n).upper()
+        key = user_type_key(n)
         if manual.get(key) in ("service", "human"):
             out[n] = (manual[key], "manual")
             continue

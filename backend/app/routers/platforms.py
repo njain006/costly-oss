@@ -238,6 +238,13 @@ class PricingOverrideRequest(BaseModel):
     pricing_overrides: dict
 
 
+def _oid_or_404(connection_id: str) -> ObjectId:
+    try:
+        return ObjectId(connection_id)
+    except Exception:
+        raise HTTPException(404, "Connection not found")
+
+
 class UserTypeRequest(BaseModel):
     user: str
     type: str  # "service" | "human" | "auto"
@@ -247,16 +254,19 @@ class UserTypeRequest(BaseModel):
 async def set_user_type(connection_id: str, body: UserTypeRequest, user_id: str = Depends(get_current_user)):
     """Mark a warehouse user as a service account or a human. "auto" removes
     the override and falls back to Snowflake's user type or the name guess."""
-    from bson import ObjectId
+    from app.services.snowflake import user_type_key
     if body.type not in ("service", "human", "auto"):
         raise HTTPException(400, "type must be service, human or auto")
-    key = f"user_types.{body.user.upper().replace('.', '_')}"
+    oid = _oid_or_404(connection_id)
+    key = f"user_types.{user_type_key(body.user)}"
     update = {"$unset": {key: ""}} if body.type == "auto" else {"$set": {key: body.type}}
-    res = await db.platform_connections.update_one({"_id": ObjectId(connection_id), "user_id": user_id}, update)
+    res = await db.platform_connections.update_one({"_id": oid, "user_id": user_id}, update)
     if not res.matched_count:
         raise HTTPException(404, "Connection not found")
+    # User types are baked into the dashboard, costs, queries and attribution
+    # pages (and their stale copies), so clear the whole account.
     from app.services.cache import cache
-    cache.clear_prefix(f"{user_id}:{connection_id}:dashboard")
+    cache.clear_prefix(f"{user_id}:{connection_id}:")
     return {"success": True}
 
 
@@ -274,10 +284,11 @@ async def set_pricing(
     - OpenAI: {"gpt-4o": {"input": 2.0, "output": 8.0}}
     - Any platform: {"discount_pct": 15}
     """
+    oid = _oid_or_404(connection_id)
     ok = await update_pricing_overrides(user_id, connection_id, body.pricing_overrides)
     if not ok:
         # Saving the same values again is not an error.
-        exists = await db.platform_connections.find_one({"_id": ObjectId(connection_id), "user_id": user_id})
+        exists = await db.platform_connections.find_one({"_id": oid, "user_id": user_id})
         if not exists:
             raise HTTPException(404, "Connection not found")
     # Prices are baked into cached pages and the credit-price cache.

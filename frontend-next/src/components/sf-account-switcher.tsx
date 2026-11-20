@@ -7,9 +7,18 @@ import { getSfAccount, setSfAccount, subscribeSfAccount } from "@/lib/sf-account
 export default function SfAccountSwitcher({ accounts }: { accounts: { id: string; name: string }[] }) {
   const selected = useSyncExternalStore(subscribeSfAccount, getSfAccount, () => "");
 
-  // Forget a selection that no longer exists (account removed).
+  // With several accounts, always pin an explicit choice. Otherwise the
+  // dropdown would show accounts[0] while the backend's default (the most
+  // recently synced account) fills the pages. Also replaces a selection
+  // whose account was removed.
   useEffect(() => {
-    if (selected && accounts.length && !accounts.some((a) => a.id === selected)) setSfAccount("");
+    if (!accounts.length) return; // still loading
+    const valid = accounts.some((a) => a.id === selected);
+    if (accounts.length === 1) {
+      if (selected && !valid) setSfAccount(""); // back to the backend default
+    } else if (!valid) {
+      setSfAccount(accounts[0].id);
+    }
   }, [selected, accounts]);
 
   if (accounts.length < 2) return null;

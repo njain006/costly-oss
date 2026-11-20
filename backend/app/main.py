@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta
 
 import redis as sync_redis
@@ -61,15 +63,40 @@ async def _locked_sync_query_history():
         r.delete("costly:lock:sync_query_history")
 
 
+logger = logging.getLogger(__name__)
+
+# Delete / extend a lock only while it still holds our token, so a run never
+# frees or keeps alive a lock that a newer run took over.
+_RELEASE_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+_RENEW_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) end return 0"
+
+
 async def _locked_prewarm():
+    """A run can outlast any fixed lock TTL (many accounts, slow queries), so
+    the lock is short and renewed while the run is alive. A killed run
+    frees it within 15 minutes; a live one never lets a second run
+    start and double the warehouse spend."""
+    import uuid
     from app.services.prewarm import prewarm_snowflake_pages
+    key, ttl, token = "costly:lock:prewarm", 900, uuid.uuid4().hex
     r = _get_redis_for_lock()
-    if not r.set("costly:lock:prewarm", "1", nx=True, ex=3600):  # a killed run frees within the hour
+    if not r.set(key, token, nx=True, ex=ttl):
         return
+
+    async def _renew():
+        while True:
+            await asyncio.sleep(ttl / 3)
+            try:
+                r.eval(_RENEW_IF_OWNER, 1, key, token, ttl)
+            except Exception:
+                logger.warning("prewarm: lock renew failed", exc_info=True)
+
+    renewer = asyncio.create_task(_renew())
     try:
         await prewarm_snowflake_pages()
     finally:
-        r.delete("costly:lock:prewarm")
+        renewer.cancel()
+        r.eval(_RELEASE_IF_OWNER, 1, key, token)
 
 
 async def _locked_sync_costs():

@@ -97,3 +97,52 @@ def test_sustained_rise_is_one_episode():
     assert e["date"] == _day(25) and e["days"] >= 3
     assert e["extra_cost"] > 100
     assert "since " + _day(25) in e["message"]
+
+
+# ── Long episodes across re-scans ─────────────────────────────────────────────
+
+from app.services.anomaly_detector import reconcile_episodes
+
+
+def _ep(date, end, ack=None, _id=None, resource="WH"):
+    d = {"user_id": "u", "type": "spike", "scope": "resource", "platform": "snowflake",
+         "resource": resource, "date": date, "end_date": end, "days": 1}
+    if ack is not None:
+        d["acknowledged"] = ack
+    if _id is not None:
+        d["_id"] = _id
+    return d
+
+
+def test_episode_keeps_original_first_day_when_window_moves_on():
+    # Stored as d1..d9; the next scan only sees it from d3.
+    out, drop = reconcile_episodes([_ep("2026-11-03", "2026-11-10")],
+                                   [_ep("2026-11-01", "2026-11-09", ack=False, _id=1)])
+    assert [a["date"] for a in out] == ["2026-11-01"]
+    assert out[0]["days"] == 10
+    assert drop == []
+
+
+def test_acknowledging_any_copy_hides_the_episode_and_extra_copies_are_removed():
+    existing = [_ep("2026-11-01", "2026-11-09", ack=True, _id=1),
+                _ep("2026-11-03", "2026-11-10", ack=False, _id=2)]
+    out, drop = reconcile_episodes([_ep("2026-11-04", "2026-11-11")], existing)
+    assert out[0]["date"] == "2026-11-01"
+    assert out[0]["acknowledged"] is True
+    assert drop == [2]
+
+
+def test_separate_episodes_and_other_targets_are_untouched():
+    existing = [_ep("2026-10-01", "2026-10-02", ack=True, _id=1),           # long ago
+                _ep("2026-11-03", "2026-11-05", ack=True, _id=2, resource="OTHER")]
+    out, drop = reconcile_episodes([_ep("2026-11-04", "2026-11-06")], existing)
+    assert out[0]["date"] == "2026-11-04"
+    assert "acknowledged" not in out[0]
+    assert drop == []
+
+
+def test_later_stored_copy_is_folded_into_an_earlier_new_episode():
+    out, drop = reconcile_episodes([_ep("2026-11-01", "2026-11-05")],
+                                   [_ep("2026-11-03", "2026-11-04", ack=False, _id=7)])
+    assert out[0]["date"] == "2026-11-01"
+    assert drop == [7]

@@ -49,7 +49,7 @@ async def warehouse_sizing(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     credit_price = await get_credit_price(source)
     result = await run_in_thread(sync_warehouse_sizing, source, days, credit_price)
     cache.set(cache_key, result, CACHE_TTL["warehouse_sizing"])
@@ -72,7 +72,7 @@ async def autosuspend_analysis(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     credit_price = await get_credit_price(source)
     result = await run_in_thread(sync_autosuspend_analysis, source, days, credit_price)
     cache.set(cache_key, result, CACHE_TTL["autosuspend"])
@@ -95,7 +95,7 @@ async def spillage(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     result = await run_in_thread(sync_spillage, source, days)
     cache.set(cache_key, result, CACHE_TTL["spillage"])
     return {**result, "fetched_at": fetched_at}
@@ -117,7 +117,7 @@ async def query_patterns(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     credit_price = await get_credit_price(source)
     result = await run_in_thread(sync_query_patterns, source, days, credit_price)
     cache.set(cache_key, result, CACHE_TTL["query_patterns"])
@@ -140,7 +140,7 @@ async def cost_attribution(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     credit_price = await get_credit_price(source)
     result = await run_in_thread(sync_cost_attribution, source, days, credit_price)
     cache.set(cache_key, result, CACHE_TTL["cost_attribution"])
@@ -163,7 +163,7 @@ async def stale_tables(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     result = await run_in_thread(sync_stale_tables, source, days)
     cache.set(cache_key, result, CACHE_TTL["stale_tables"])
     return {**result, "fetched_at": fetched_at}
@@ -181,7 +181,7 @@ async def resize_warehouse(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await run_in_thread(sync_execute_resize, source, name, body.new_size)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -197,8 +197,8 @@ async def update_autosuspend(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await run_in_thread(sync_execute_autosuspend, source, name, body.seconds)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:autosuspend")
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:autosuspend")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -217,7 +217,7 @@ async def optimization_resize_warehouse(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_resize(source, name, body.new_size, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -237,8 +237,8 @@ async def optimization_set_autosuspend(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_autosuspend(source, name, body.seconds, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:autosuspend")
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:autosuspend")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -253,7 +253,7 @@ async def optimization_suspend_warehouse(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_suspend(source, name, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 
@@ -268,7 +268,7 @@ async def optimization_resume_warehouse(
         raise HTTPException(400, "Cannot execute DDL in demo mode. Connect a Snowflake account first.")
     result = await exec_resume(source, name, user_id=user_id)
     if result.get("success"):
-        cache.delete_prefix(f"{scope}:warehouse")
+        cache.clear_prefix(f"{scope}:warehouse")
     return result
 
 

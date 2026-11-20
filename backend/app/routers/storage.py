@@ -28,7 +28,7 @@ async def storage(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     result = await run_in_thread(sync_storage, source, days)
     cache.set(cache_key, result, CACHE_TTL["storage"])
     return {**result, "fetched_at": fetched_at}

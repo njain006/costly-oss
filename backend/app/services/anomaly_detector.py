@@ -296,28 +296,91 @@ async def detect_anomalies_for_user(user_id: str) -> list[dict]:
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
+def _target(a: dict) -> tuple:
+    return (a.get("scope"), a.get("platform"), a.get("resource"))
+
+
+def reconcile_episodes(new: list[dict], existing: list[dict]) -> tuple[list[dict], list]:
+    """Line new episodes up with spike records already stored.
+
+    Detection only sees the last few days, so an episode that runs longer
+    than that window gets a later first day on each re-scan. Without this,
+    every re-scan would store the same episode again under a new date, and
+    acknowledging one copy would leave the others showing.
+
+    For each new episode, stored records for the same target whose dates
+    overlap it (or end within EPISODE_GAP_DAYS of its start) are the same
+    episode. The episode keeps the earliest first day among them, so the
+    original record and its acknowledgement stay put; the others are
+    returned for deletion.
+    Returns (episodes to upsert, ids of stored records to delete)."""
+    by_target: dict = defaultdict(list)
+    for e in existing:
+        by_target[_target(e)].append(e)
+    out, drop = [], []
+    for a in new:
+        start = _shift(a["date"], -EPISODE_GAP_DAYS)
+        end = a.get("end_date") or a["date"]
+        same = sorted(
+            (e for e in by_target[_target(a)]
+             if e["date"] <= end and (e.get("end_date") or e["date"]) >= start),
+            key=lambda e: e["date"],
+        )
+        if not same:
+            out.append(a)
+            continue
+        anchor = same[0]
+        merged = {**a}
+        if anchor["date"] < a["date"]:
+            merged["date"] = anchor["date"]
+            merged["days"] = max(a.get("days", 1),
+                                 len(_dates_between(anchor["date"], end)))
+        # Acknowledging any copy acknowledges the episode.
+        if any(e.get("acknowledged") for e in same):
+            merged["acknowledged"] = True
+        stale = [e for e in same if e["date"] != merged["date"]]
+        drop.extend(e["_id"] for e in stale if "_id" in e)
+        by_target[_target(a)] = [e for e in by_target[_target(a)] if e not in stale]
+        out.append(merged)
+    return out, drop
+
+
 async def _persist_anomalies(user_id: str, anomalies: list[dict]):
     """Upsert one document per user+date+scope+platform+resource.
 
     First-seen time and acknowledgement survive re-detection ($setOnInsert),
     so a re-scan never resets "acknowledged" or makes old spikes look new.
-    Documents in the old one-per-check format are removed."""
-    from pymongo import UpdateOne
+    Long episodes are merged into the record they started as (see
+    reconcile_episodes). Documents in the old one-per-check format are
+    removed."""
+    from pymongo import DeleteMany, UpdateOne
 
     await db.anomalies.delete_many({"user_id": user_id, "type": {"$ne": "spike"}})
+    if not anomalies:
+        return
+    earliest = _shift(min(a["date"] for a in anomalies), -(EPISODE_GAP_DAYS + 60))
+    existing = await db.anomalies.find(
+        {"user_id": user_id, "type": "spike", "$or": [
+            {"end_date": {"$gte": earliest}}, {"date": {"$gte": earliest}},
+        ]},
+        {"_id": 1, "date": 1, "end_date": 1, "scope": 1, "platform": 1,
+         "resource": 1, "acknowledged": 1},
+    ).to_list(5000)
+    anomalies, drop = reconcile_episodes(anomalies, existing)
+
     now = datetime.utcnow().isoformat()
     ops = []
+    if drop:
+        ops.append(DeleteMany({"_id": {"$in": drop}}))
     for a in anomalies:
         key = {k: a[k] for k in ("user_id", "date", "scope", "platform", "resource")}
-        ops.append(UpdateOne(
-            key,
-            {"$set": a, "$setOnInsert": {"detected_at": now, "acknowledged": False}},
-            upsert=True,
-        ))
-    if ops:
-        result = await db.anomalies.bulk_write(ops)
-        if result.upserted_count:
-            print(f"[ANOMALY] {result.upserted_count} new anomalies for user {user_id[:8]}...")
+        on_insert = {"detected_at": now}
+        if "acknowledged" not in a:
+            on_insert["acknowledged"] = False
+        ops.append(UpdateOne(key, {"$set": a, "$setOnInsert": on_insert}, upsert=True))
+    result = await db.anomalies.bulk_write(ops)
+    if result.upserted_count:
+        print(f"[ANOMALY] {result.upserted_count} new anomalies for user {user_id[:8]}...")
 
 
 async def detect_anomalies_all_users():

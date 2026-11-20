@@ -34,7 +34,7 @@ async def dashboard(
         cache.delete(cache_key)
     cached = cache.get(cache_key)
     if cached:
-        return {**cached, "cached": True, "fetched_at": fetched_at}
+        return {**cached, "cached": True, "fetched_at": cached.get("computed_at") or fetched_at}
     credit_price = await get_credit_price(source)
     result = await run_in_thread(sync_dashboard, source, days, credit_price)
     cache.set(cache_key, result, CACHE_TTL["dashboard"])
