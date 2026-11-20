@@ -119,10 +119,11 @@ SMTP_PASSWORD=<your-app-password>
 ### 2. Run with Docker Compose
 
 ```bash
-docker compose up -d
+docker compose up -d                  # local: http://localhost:3000
+docker compose --profile prod up -d   # public host: also starts nginx (TLS)
 ```
 
-This starts 5 containers:
+This starts these containers:
 
 | Service | Port | Description |
 |---------|------|-------------|
@@ -130,7 +131,7 @@ This starts 5 containers:
 | backend | 8000 | FastAPI API |
 | mongodb | 27017 | Database |
 | redis | 6379 | Cache |
-| nginx | 80/443 | Reverse proxy |
+| nginx | 80/443 | Reverse proxy (`--profile prod` only) |
 
 ### 3. Open the app
 

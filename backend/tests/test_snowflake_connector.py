@@ -1733,7 +1733,11 @@ class TestTolerantCursor:
     @pytest.fixture(autouse=True)
     def _real_error_class(self, monkeypatch):
         import app.services.snowflake as svc
-        monkeypatch.setattr(svc.snowflake.connector.errors, "ProgrammingError", _FakeProgrammingError)
+        # raising=False: on the MagicMock stub the attribute may not exist yet.
+        monkeypatch.setattr(
+            svc.snowflake.connector.errors, "ProgrammingError", _FakeProgrammingError,
+            raising=False,
+        )
 
     @staticmethod
     def _cursor(exc):

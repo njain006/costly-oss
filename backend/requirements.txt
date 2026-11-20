@@ -9,6 +9,7 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 cryptography
 snowflake-connector-python
+boto3
 httpx
 python-dotenv
 google-auth

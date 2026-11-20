@@ -10,6 +10,8 @@ Re-record::
 """
 from __future__ import annotations
 
+from datetime import date
+
 import httpx
 import respx
 from app.models.platform import CostCategory
@@ -31,7 +33,10 @@ def test_fetch_costs_aggregates_jobs_by_day():
     # filters by connectionId via query params, but our mock matches the path.
     respx.get(f"{BASE}/jobs").mock(return_value=httpx.Response(200, json=jobs))
 
-    costs = AirbyteConnector(CREDS).fetch_costs(days=30)
+    # The fixture's jobs are dated 2026-04-21/22; size the window so they stay
+    # inside it whatever today's date is.
+    days = (date.today() - date(2026, 4, 21)).days + 2
+    costs = AirbyteConnector(CREDS).fetch_costs(days=days)
 
     # 2 connections × 2 distinct dates (2026-04-21, 2026-04-22) = 4 records
     assert len(costs) >= 2
