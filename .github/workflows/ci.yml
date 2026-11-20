@@ -78,7 +78,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # schemathesis in the same resolve as the app: installed afterwards
+        # it downgrades starlette under the latest FastAPI, which then fails
+        # to import (body_limit).
+        run: pip install -r requirements.txt "schemathesis>=3.30,<4"
 
       - name: Run connector contract + property tests
         run: pytest tests/contract/ -v --tb=short
@@ -90,9 +93,6 @@ jobs:
           LLM_API_KEY: test-key
           LLM_PROVIDER: anthropic
           LLM_MODEL: test-model
-
-      - name: Install schemathesis
-        run: pip install "schemathesis>=3.30,<4"
 
       - name: Dump OpenAPI spec
         run: python -m tests.contract.dump_openapi > openapi.json
@@ -207,7 +207,8 @@ jobs:
 
   # ─── Playwright E2E Tests ───────────────────────────────────────
   e2e-tests:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, which Playwright doesn't support yet.
+    runs-on: ubuntu-24.04
     continue-on-error: true  # advisory until tests are stabilized
     needs: [backend-tests, frontend-build]
     defaults:
