@@ -14,7 +14,7 @@ httpx
 python-dotenv
 google-auth
 apscheduler
-redis
+redis<8.2  # 8.2.0 breaks fakeredis 2.40 (used by the tests); lift once fakeredis supports it
 anthropic
 slowapi
 
