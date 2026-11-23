@@ -1,5 +1,7 @@
 "use client";
 
+import LoadError from "@/components/load-error";
+
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
 import DateRangePicker from "@/components/date-range-picker";
@@ -14,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HardDrive, DollarSign, Database, AlertTriangle } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { COLORS } from "@/lib/constants";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 interface StorageData {
   tables: Array<{
@@ -42,17 +44,19 @@ interface StaleTableData {
   stale_count: number;
   stale_total_gb: number;
   stale_monthly_cost: number;
+  available?: boolean;
+  reason?: string;
   fetched_at?: string; demo?: boolean;
 }
 
 export default function StoragePage() {
   const { days, refreshTrigger } = useDateRange();
-  const { data, loading } = useApi<StorageData>(
-    `/storage?days=${days}&refresh=${refreshTrigger > 0}`,
+  const { data, loading, error: loadError } = useApi<StorageData>(
+    `/storage?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: staleData } = useApi<StaleTableData>(
-    `/stale-tables?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/stale-tables?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
 
@@ -67,6 +71,7 @@ export default function StoragePage() {
       </div>
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <Skeleton className="h-80 rounded-lg" />
       ) : data ? (
@@ -97,9 +102,10 @@ export default function StoragePage() {
                         <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
                         <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v} GB`} />
                         <Tooltip formatter={(v) => `${Number(v).toFixed(1)} GB`} />
-                        <Area type="monotone" dataKey="table_gb" stackId="1" fill={COLORS.primary} stroke={COLORS.primary} fillOpacity={0.6} name="Table" />
+                        <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                        <Area type="monotone" dataKey="table_gb" stackId="1" fill={COLORS.primary} stroke={COLORS.primary} fillOpacity={0.6} name="Tables (incl. time travel)" />
                         <Area type="monotone" dataKey="stage_gb" stackId="1" fill={COLORS.chart[1]} stroke={COLORS.chart[1]} fillOpacity={0.4} name="Stage" />
-                        <Area type="monotone" dataKey="failsafe_gb" stackId="1" fill={COLORS.chart[2]} stroke={COLORS.chart[2]} fillOpacity={0.3} name="Failsafe" />
+                        <Area type="monotone" dataKey="failsafe_gb" stackId="1" fill={COLORS.chart[2]} stroke={COLORS.chart[2]} fillOpacity={0.3} name="Fail-safe" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -184,7 +190,9 @@ export default function StoragePage() {
                     <CardTitle className="text-base">Tables Not Queried in 90+ Days</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    {staleData.stale_tables.length === 0 ? (
+                    {staleData.available === false ? (
+                      <p className="text-sm text-muted-foreground py-8 text-center">Not checked: {staleData.reason}</p>
+                    ) : staleData.stale_tables.length === 0 ? (
                       <p className="text-sm text-muted-foreground py-8 text-center">No stale tables found.</p>
                     ) : (
                       <Table>

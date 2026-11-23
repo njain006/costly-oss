@@ -61,16 +61,24 @@ The frontend separately needs `NEXT_PUBLIC_API_URL` — this is passed as a buil
 
 ## 4. Bring up the stack
 
+**Local / single-user** (app on http://localhost:3000, not reachable from other machines):
+
 ```bash
 docker compose up -d
 ```
 
-This starts five containers:
+**Production** (public domain with TLS through nginx):
+
+```bash
+docker compose --profile prod up -d
+```
+
+nginx is in the `prod` profile, so a plain `docker compose up -d` does **not** start it. On a public host always pass `--profile prod` (or set `COMPOSE_PROFILES=prod` in the shell or a `.env` next to `docker-compose.yml`), otherwise the site has no public entry point.
 
 | Service | Port (host) | Purpose |
 |---------|-------------|---------|
-| `nginx` | 80, 443 | Reverse proxy; terminates TLS (Let's Encrypt mount) and routes `/api/` → backend, `/` → frontend. |
-| `frontend` | 3000 | Next.js 15 standalone build. |
+| `nginx` (`prod` profile only) | 80, 443 | Reverse proxy; terminates TLS (Let's Encrypt mount) and routes `/api/` → backend, `/` → frontend. |
+| `frontend` | 127.0.0.1:3000 | Next.js 15 standalone build. |
 | `backend` | 8000 | FastAPI with 4 Uvicorn workers. |
 | `mongodb` | 27017 | Database. Persistent volume `mongo_data`. |
 | `redis` | 6379 | Cache. Persistent volume `redis_data`. In-memory fallback if unreachable. |
@@ -149,7 +157,7 @@ Background sync runs on the backend scheduler; manual syncs are triggered from t
 ```bash
 git pull
 docker compose build frontend backend
-docker compose up -d
+docker compose --profile prod up -d   # drop --profile prod for a local-only install
 ```
 
 Next.js inlines `NEXT_PUBLIC_*` at build time, so always rebuild the frontend image when you change `NEXT_PUBLIC_API_URL` or any public env var.

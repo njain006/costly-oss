@@ -21,6 +21,7 @@ import {
 import {
   Plus,
   Search,
+  Trash2,
   CheckCircle2,
   RefreshCw,
   Loader2,
@@ -56,6 +57,29 @@ interface ConnectorDef {
   fields: { key: string; label: string; type: string; placeholder: string }[];
 }
 
+// Least-privilege Snowflake setup. Mirrors docs/connectors/snowflake.md.
+const SNOWFLAKE_SETUP_SQL = `-- Run as ACCOUNTADMIN in a Snowsight worksheet.
+-- 1. Key pair (on your machine):
+--    openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out costly_rsa.p8 -nocrypt
+--    openssl rsa -in costly_rsa.p8 -pubout -out costly_rsa.pub
+USE ROLE ACCOUNTADMIN;
+CREATE ROLE IF NOT EXISTS COSTLY_READER;
+CREATE WAREHOUSE IF NOT EXISTS COSTLY_WH
+  WAREHOUSE_SIZE = XSMALL AUTO_SUSPEND = 60 AUTO_RESUME = TRUE INITIALLY_SUSPENDED = TRUE;
+GRANT USAGE ON WAREHOUSE COSTLY_WH TO ROLE COSTLY_READER;
+-- Billing, metering, storage, warehouse events (no query text):
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER TO ROLE COSTLY_READER;
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER TO ROLE COSTLY_READER;
+-- Optional, exposes query TEXT; get security sign-off first.
+-- Unlocks query performance, queue/spill, workloads, auto-suspend tuning:
+-- GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE COSTLY_READER;
+CREATE USER IF NOT EXISTS COSTLY_SVC
+  TYPE = SERVICE DEFAULT_ROLE = COSTLY_READER DEFAULT_WAREHOUSE = COSTLY_WH
+  RSA_PUBLIC_KEY = '<contents of costly_rsa.pub without the BEGIN/END lines>';
+GRANT ROLE COSTLY_READER TO USER COSTLY_SVC;
+-- Optional: let it see auto-suspend settings (SHOW WAREHOUSES):
+-- GRANT MONITOR ON WAREHOUSE <each warehouse> TO ROLE COSTLY_READER;`;
+
 // ─── Connector Catalog ────────────────────────────────────────────────────────
 
 const CONNECTORS: ConnectorDef[] = [
@@ -84,10 +108,10 @@ const CONNECTORS: ConnectorDef[] = [
     badgeColor: "bg-cyan-100 text-cyan-700",
     fields: [
       { key: "account", label: "Account Identifier", type: "text", placeholder: "xy12345.us-east-1" },
-      { key: "user", label: "User", type: "text", placeholder: "COSTLY_USER" },
+      { key: "user", label: "User", type: "text", placeholder: "COSTLY_SVC" },
       { key: "private_key", label: "Private Key (PEM)", type: "textarea", placeholder: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----" },
-      { key: "warehouse", label: "Warehouse (optional)", type: "text", placeholder: "COMPUTE_WH" },
-      { key: "role", label: "Role (optional)", type: "text", placeholder: "COSTLY_ROLE" },
+      { key: "warehouse", label: "Warehouse (optional, user's default if blank)", type: "text", placeholder: "COSTLY_WH" },
+      { key: "role", label: "Role (optional, user's default if blank)", type: "text", placeholder: "COSTLY_READER" },
     ],
   },
   {
@@ -337,8 +361,9 @@ function ConnectDialog({
   connector: ConnectorDef | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onSuccess: () => void;
+  onSuccess: (newId?: string) => void;
 }) {
+  const [showSql, setShowSql] = useState(false);
   const [connName, setConnName] = useState("");
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -393,20 +418,18 @@ function ConnectDialog({
     setSaving(true);
     setError(null);
     try {
-      // Fill in defaults for optional fields left empty
-      const creds = { ...credentials };
-      for (const f of connector.fields) {
-        if (!creds[f.key] && f.label.toLowerCase().includes("optional") && f.placeholder) {
-          creds[f.key] = f.placeholder;
-        }
-      }
-      await api.post("/platforms/connect", {
+      // Send only what the user typed. Placeholders are examples; sending
+      // them made a blank Role become a role that may not exist.
+      const creds = Object.fromEntries(
+        Object.entries(credentials).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v),
+      );
+      const res = (await api.post("/platforms/connect", {
         platform: connector.key,
         name: connName,
         credentials: creds,
-      });
+      })) as { id?: string };
       handleClose();
-      onSuccess();
+      onSuccess(res?.id);
     } catch (err) {
       setError(typeof err === "string" ? err : "Connection failed. Check your credentials and try again.");
     } finally {
@@ -426,7 +449,7 @@ function ConnectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="text-xl">{connector.emoji}</span>
@@ -436,6 +459,33 @@ function ConnectDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-1">
+          {connector.key === "snowflake" && (
+            <div className="min-w-0 rounded-md border border-sky-100 bg-sky-50 p-3 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sky-900">
+                  First, create a read-only user in Snowflake. Connect one account at a time; add more later.
+                </span>
+                <Button size="sm" variant="outline" className="h-7 shrink-0" onClick={() => setShowSql((v) => !v)}>
+                  {showSql ? "Hide setup SQL" : "Show setup SQL"}
+                </Button>
+              </div>
+              {showSql && (
+                <>
+                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-white p-2 text-[11px] leading-snug text-slate-700 border">
+                    {SNOWFLAKE_SETUP_SQL}
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 mt-1"
+                    onClick={() => navigator.clipboard?.writeText(SNOWFLAKE_SETUP_SQL)}
+                  >
+                    Copy SQL
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
           <div>
             <Label htmlFor="conn-name">Connection Name</Label>
             <Input
@@ -618,13 +668,12 @@ function ConnectorCard({
         size="sm"
         variant={isConnected ? "outline" : "default"}
         className="w-full gap-1.5 text-xs h-8"
-        onClick={() => !isConnected && onConnect(connector)}
-        disabled={isConnected}
+        onClick={() => onConnect(connector)}
       >
         {isConnected ? (
           <>
-            <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-            Connected
+            <Plus className="h-3.5 w-3.5" />
+            Add another account
           </>
         ) : (
           <>
@@ -642,11 +691,15 @@ function ConnectorCard({
 function ConnectedRow({
   conn,
   syncing,
+  syncError,
   onSync,
+  onDelete,
 }: {
   conn: PlatformConnection;
   syncing: boolean;
+  syncError?: string;
   onSync: (id: string) => void;
+  onDelete: (conn: PlatformConnection) => void;
 }) {
   const connector = CONNECTORS.find((c) => c.key === conn.platform);
   return (
@@ -661,6 +714,7 @@ function ConnectedRow({
               ? ` · Synced ${new Date(conn.last_synced).toLocaleDateString()}`
               : " · Never synced"}
           </p>
+          {syncError && <p className="text-xs text-red-600 mt-0.5">Sync failed: {syncError}</p>}
         </div>
       </div>
       <div className="flex items-center gap-2 ml-4 shrink-0">
@@ -680,6 +734,15 @@ function ConnectedRow({
           ) : (
             <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
           )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0"
+          onClick={() => onDelete(conn)}
+          title="Remove connection"
+        >
+          <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" />
         </Button>
       </div>
     </div>
@@ -704,6 +767,7 @@ function PlatformsPageInner() {
   const [activeConnector, setActiveConnector] = useState<ConnectorDef | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
 
   // Honor ?add=<connector_key> deep-link from the Setup page.
   const searchParams = useSearchParams();
@@ -747,16 +811,29 @@ function PlatformsPageInner() {
   const handleSync = useCallback(
     async (id: string) => {
       setSyncing(id);
+      setSyncErrors((e) => ({ ...e, [id]: "" }));
       try {
         await api.post(`/platforms/${id}/sync?days=30`);
         refetch();
-      } catch {
-        // silent
+      } catch (err) {
+        setSyncErrors((e) => ({ ...e, [id]: typeof err === "string" ? err : "check the credentials and grants" }));
       } finally {
         setSyncing(null);
       }
     },
     [refetch]
+  );
+
+  const handleDelete = useCallback(
+    async (conn: PlatformConnection) => {
+      if (!window.confirm(`Remove "${conn.name}"? Its stored credentials and synced cost data are deleted.`)) return;
+      try {
+        await api.delete(`/platforms/${conn.id}`);
+      } finally {
+        refetch();
+      }
+    },
+    [refetch],
   );
 
   const groupedFiltered = useMemo(() => {
@@ -781,8 +858,9 @@ function PlatformsPageInner() {
         <Button
           className="gap-2 shrink-0 self-start sm:self-auto"
           onClick={() => {
-            setActiveConnector(null);
-            setDialogOpen(true);
+            const box = document.getElementById("platform-search");
+            box?.scrollIntoView({ behavior: "smooth", block: "center" });
+            box?.focus();
           }}
         >
           <Plus className="h-4 w-4" />
@@ -800,7 +878,7 @@ function PlatformsPageInner() {
             <p className="text-xs text-slate-500">Connected</p>
             <p className="text-lg font-bold text-slate-900 leading-tight">
               {connectedCount}{" "}
-              <span className="text-sm font-normal text-slate-400">of 16 platforms</span>
+              <span className="text-sm font-normal text-slate-400">of {CONNECTORS.length} platforms</span>
             </p>
           </div>
         </div>
@@ -811,7 +889,7 @@ function PlatformsPageInner() {
           <div>
             <p className="text-xs text-slate-500">Categories</p>
             <p className="text-lg font-bold text-slate-900 leading-tight">
-              6{" "}
+              {CATEGORIES.length}{" "}
               <span className="text-sm font-normal text-slate-400">platform types</span>
             </p>
           </div>
@@ -848,7 +926,9 @@ function PlatformsPageInner() {
                 key={conn.id}
                 conn={conn}
                 syncing={syncing === conn.id}
+                syncError={syncErrors[conn.id]}
                 onSync={handleSync}
+                onDelete={handleDelete}
               />
             ))}
           </div>
@@ -859,6 +939,7 @@ function PlatformsPageInner() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
         <Input
+          id="platform-search"
           className="pl-9 bg-white"
           placeholder="Search platforms by name or category..."
           value={search}
@@ -911,7 +992,11 @@ function PlatformsPageInner() {
           setDialogOpen(v);
           if (!v) setActiveConnector(null);
         }}
-        onSuccess={refetch}
+        onSuccess={(newId) => {
+          refetch();
+          // Load data right away instead of waiting for the 6-hourly sync.
+          if (newId) handleSync(newId);
+        }}
       />
     </div>
   );

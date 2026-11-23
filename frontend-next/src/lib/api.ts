@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getSfAccount, withSfAccount } from "@/lib/sf-account";
 
 const api = axios.create({
   baseURL: "/api",
@@ -16,6 +17,11 @@ api.interceptors.request.use((config) => {
         return config;
       }
     }
+
+    // Every Snowflake request, reads and writes alike (resize, auto-suspend,
+    // query sync, chat), targets the account picked in the sidebar.
+    // withSfAccount leaves non-Snowflake paths and explicit ids alone.
+    if (config.url) config.url = withSfAccount(config.url, getSfAccount());
 
     const token = localStorage.getItem("costly_token");
     if (token) {
@@ -70,8 +76,14 @@ api.interceptors.response.use(
       }
     }
 
+    // Connector errors come as {error: {vendor_message, remediation_hint}};
+    // show what happened and what to do, not a generic failure.
+    const env = error.response?.data?.error;
+    const connectorMsg = env
+      ? [env.vendor_message || env.message, env.remediation_hint].filter(Boolean).join(" ")
+      : null;
     return Promise.reject(
-      error.response?.data?.detail || error.message || "Request failed"
+      connectorMsg || error.response?.data?.detail || error.message || "Request failed"
     );
   }
 );

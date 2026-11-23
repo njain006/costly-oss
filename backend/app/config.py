@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379"
+    # Background precompute of Snowflake pages. Each run uses your Snowflake
+    # warehouse (roughly 10-15 min of an X-Small on a busy account), so it
+    # costs credits. ACCOUNT_USAGE lags 1-3h anyway; 0 turns it off.
+    prewarm_interval_hours: int = 6
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

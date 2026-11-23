@@ -1,5 +1,9 @@
 "use client";
 
+import UserTypeFilter, { filterByUserType, useUserTypeFilter } from "@/components/user-type-filter";
+
+import LoadError from "@/components/load-error";
+
 import { useMemo } from "react";
 import { useDateRange } from "@/providers/date-range-provider";
 import { useApi } from "@/hooks/use-api";
@@ -12,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { COLORS } from "@/lib/constants";
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 interface CostsData {
   daily: Array<{ date: string; warehouse: string; cost: number; credits: number }>;
@@ -23,7 +27,7 @@ interface CostsData {
 }
 
 interface CostAttributionData {
-  by_user: Array<{ user: string; cost_usd: number; query_count: number; pct: number }>;
+  by_user: Array<{ user: string; cost_usd: number; query_count: number; pct: number; type?: string; type_source?: string }>;
   by_role: Array<{ role: string; cost_usd: number; query_count: number; pct: number }>;
   by_database: Array<{ database: string; cost_usd: number; query_count: number; pct: number }>;
   by_warehouse: Array<{ warehouse: string; cost_usd: number; credits: number }>;
@@ -34,14 +38,16 @@ interface CostAttributionData {
 
 export default function CostAnalysisPage() {
   const { days, refreshTrigger } = useDateRange();
-  const { data, loading } = useApi<CostsData>(
-    `/costs?days=${days}&refresh=${refreshTrigger > 0}`,
+  const { data, loading, error: loadError } = useApi<CostsData>(
+    `/costs?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
   const { data: attrData } = useApi<CostAttributionData>(
-    `/cost-attribution?days=${days}&refresh=${refreshTrigger > 0}`,
+    `/cost-attribution?days=${days}&refresh=${refreshTrigger}`,
     [days, refreshTrigger]
   );
+  const userType = useUserTypeFilter();
+  const usersShown = filterByUserType(attrData?.by_user ?? [], userType, (u) => u.type);
 
   const chartData = useMemo<{ data: Record<string, number>[]; warehouses: string[] }>(() => {
     if (!data?.daily) return { data: [], warehouses: [] };
@@ -66,6 +72,7 @@ export default function CostAnalysisPage() {
       </div>
       <DemoBanner />
 
+      <LoadError error={loadError} />
       {loading ? (
         <Skeleton className="h-80 rounded-lg" />
       ) : data ? (
@@ -91,6 +98,7 @@ export default function CostAnalysisPage() {
                       <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
                       <Tooltip formatter={(v) => formatCurrency(Number(v))} />
+                      <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                       {chartData.warehouses.map((wh, i) => (
                         <Area key={wh} type="monotone" dataKey={wh} stackId="1" fill={COLORS.chart[i % COLORS.chart.length]} stroke={COLORS.chart[i % COLORS.chart.length]} fillOpacity={0.6} />
                       ))}
@@ -135,12 +143,15 @@ export default function CostAnalysisPage() {
               <>
                 <Card className="mb-6">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Cost by User</CardTitle>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <CardTitle className="text-base">Cost by User</CardTitle>
+                      <UserTypeFilter />
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={attrData.by_user} layout="vertical">
+                        <BarChart data={usersShown} layout="vertical">
                           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                           <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
                           <YAxis dataKey="user" type="category" tick={{ fontSize: 11 }} width={120} />
@@ -166,9 +177,9 @@ export default function CostAnalysisPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {attrData.by_user.map((u) => (
+                        {usersShown.map((u) => (
                           <TableRow key={u.user}>
-                            <TableCell className="font-medium">{u.user}</TableCell>
+                            <TableCell className="font-medium">{u.user}{u.type && <span className="ml-1.5 text-[10px] text-muted-foreground">{u.type === "service" ? "service" : "person"}{u.type_source === "guess" ? "?" : ""}</span>}</TableCell>
                             <TableCell className="text-right">{formatCurrency(u.cost_usd)}</TableCell>
                             <TableCell className="text-right">{formatNumber(u.query_count)}</TableCell>
                             <TableCell className="text-right">{u.pct}%</TableCell>

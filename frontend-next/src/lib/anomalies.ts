@@ -34,6 +34,10 @@ export interface RawAnomaly {
   detected_at?: string;
   acknowledged?: boolean;
   acknowledged_at?: string;
+  cause?: string;
+  end_date?: string;
+  days?: number;
+  extra_cost?: number;
 }
 
 export interface NormalizedAnomaly {
@@ -53,6 +57,12 @@ export interface NormalizedAnomaly {
   message: string;
   acknowledged: boolean;
   derived: boolean;
+  /** Cause computed by the backend from the cost lines that rose. */
+  cause?: string;
+  endDate: string;
+  days: number;
+  /** Total spend above baseline over the whole episode. */
+  extraUsd: number;
 }
 
 export interface AnomalyListResponse {
@@ -116,6 +126,10 @@ export function normalizeAnomaly(raw: RawAnomaly, local: LocalAnomalyState | nul
     message: raw.message ?? buildFallbackMessage(raw),
     acknowledged: Boolean(raw.acknowledged) || ackLocal,
     derived: false,
+    cause: raw.cause,
+    endDate: raw.end_date ?? raw.date,
+    days: raw.days ?? 1,
+    extraUsd: round2(raw.extra_cost ?? deltaUsd),
   };
 }
 
@@ -241,6 +255,9 @@ export function deriveFromTrend(daily: DailyTrendPoint[]): NormalizedAnomaly[] {
         message: `Total daily spend of $${cost.toFixed(0)} is ${pct.toFixed(0)}% above the ${daily.length}-day average of $${mean.toFixed(0)} (z-score ${z.toFixed(1)})`,
         acknowledged: false,
         derived: true,
+        endDate: point.date,
+        days: 1,
+        extraUsd: round2(cost - mean),
       });
     }
   }
@@ -252,6 +269,7 @@ export function deriveFromTrend(daily: DailyTrendPoint[]): NormalizedAnomaly[] {
  * context and returns a single-line explanation that is better than nothing.
  */
 export function probableCause(a: NormalizedAnomaly): string {
+  if (a.cause) return a.cause;
   if (a.scope === "resource" && a.resource) {
     return `Resource ${a.resource} on ${a.platform || "this platform"} is running hotter than its 30-day baseline.`;
   }

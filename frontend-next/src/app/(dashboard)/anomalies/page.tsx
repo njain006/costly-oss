@@ -149,7 +149,16 @@ export default function AnomaliesPage() {
 
   // KPIs
   const totalImpact = useMemo(
-    () => items.filter((i) => i.status === "new").reduce((s, i) => s + Math.abs(i.deltaUsd), 0),
+    // Total-spend cards already include the platform/resource lines that
+    // drove them, so only add a resource card's extra on days with no
+    // total-spend card. Each episode counts once.
+    () => {
+      const open = items.filter((i) => i.status === "new" || i.status === "acknowledged");
+      const totalDays = new Set(open.filter((i) => i.scope === "total").map((i) => i.date));
+      return open
+        .filter((i) => i.scope === "total" || !totalDays.has(i.date))
+        .reduce((s, i) => s + Math.max(i.extraUsd, 0), 0);
+    },
     [items],
   );
   const highSeverityCount = items.filter((i) => i.severity === "high" && i.status === "new").length;
@@ -211,10 +220,10 @@ export default function AnomaliesPage() {
           description={`${highSeverityCount} high-severity`}
         />
         <StatCard
-          title="Impact today"
+          title="Extra spend"
           value={totalImpact > 0 ? `$${totalImpact.toFixed(0)}` : "$0"}
           icon={TrendingUp}
-          description="Sum of new spikes vs baseline"
+          description="Open spikes, above their usual daily spend"
         />
         <StatCard
           title="Acknowledged"

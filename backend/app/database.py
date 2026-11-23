@@ -32,8 +32,15 @@ async def create_indexes():
     await db.unified_costs.create_index(
         [("user_id", ASCENDING), ("platform", ASCENDING), ("resource", ASCENDING)]
     )
+    # One row per account: two connections to the same platform often share
+    # resource names (e.g. COMPUTE_WH, "Cloud services"). The old unique key
+    # had no connection_id, so a second account's sync failed with E11000.
+    old_key = [("user_id", 1), ("date", 1), ("platform", 1), ("service", 1), ("resource", 1)]
+    async for ix in db.unified_costs.list_indexes():
+        if ix.get("unique") and list(ix["key"].items()) == old_key:
+            await db.unified_costs.drop_index(ix["name"])
     await db.unified_costs.create_index(
-        [("user_id", ASCENDING), ("date", ASCENDING),
+        [("user_id", ASCENDING), ("connection_id", ASCENDING), ("date", ASCENDING),
          ("platform", ASCENDING), ("service", ASCENDING), ("resource", ASCENDING)],
         unique=True,
     )

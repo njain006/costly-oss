@@ -63,6 +63,10 @@ def _get_connector(connection_doc: dict) -> BaseConnector:
             creds[k] = decrypt_value(v)
         except Exception:
             creds[k] = v  # Not encrypted (e.g. region)
+    # Connectors that price natively (Snowflake: per service type, AI credits,
+    # storage per TB) read the overrides themselves.
+    if connection_doc.get("pricing_overrides") and "pricing_overrides" not in creds:
+        creds["pricing_overrides"] = connection_doc["pricing_overrides"]
     return connector_cls(creds)
 
 
@@ -144,7 +148,9 @@ async def sync_platform_costs(user_id: str, connection_id: str, days: int = 30) 
     if pricing_overrides:
         costs = _apply_pricing_overrides(costs, pricing_overrides, conn["platform"])
 
-    # Upsert into unified_costs collection
+    # Upsert into unified_costs collection. Drill-down rows re-describe
+    # spend already counted elsewhere, so they never enter the ledger.
+    costs = [c for c in costs if not (c.metadata or {}).get("drilldown")]
     ops = []
     for cost in costs:
         doc = cost.model_dump()
@@ -164,10 +170,32 @@ async def sync_platform_costs(user_id: str, connection_id: str, days: int = 30) 
             "update": {"$set": doc},
         })
 
-    # Batch upsert
+    # Batch upsert, tagged with this sync's id
+    from uuid import uuid4
     from pymongo import UpdateOne
+    sync_id = uuid4().hex
+    for op in ops:
+        op["update"]["$set"]["sync_id"] = sync_id
     bulk_ops = [UpdateOne(op["filter"], op["update"], upsert=True) for op in ops]
     result = await db.unified_costs.bulk_write(bulk_ops)
+
+    # Rows in the re-synced window that this sync did not produce are stale
+    # (a service was renamed, a row became drill-down, a warehouse split
+    # replaced an account-level row). Leaving them double counts.
+    dates = sorted({c.date for c in costs})
+    removed = 0
+    if dates:
+        # Only for services this sync returned: if one source failed this
+        # time (e.g. storage timed out), its earlier rows are kept.
+        services = sorted({c.service for c in costs})
+        res = await db.unified_costs.delete_many({
+            "user_id": user_id,
+            "connection_id": connection_id,
+            "date": {"$gte": dates[0], "$lte": dates[-1]},
+            "service": {"$in": services},
+            "sync_id": {"$ne": sync_id},
+        })
+        removed = res.deleted_count
 
     # Update last_synced
     await db.platform_connections.update_one(
@@ -180,6 +208,8 @@ async def sync_platform_costs(user_id: str, connection_id: str, days: int = 30) 
         "records": len(costs),
         "upserted": result.upserted_count,
         "modified": result.modified_count,
+        "removed_stale": removed,
+        "warnings": list(getattr(connector, "warnings", []) or [])[:20],
     }
 
 
@@ -195,18 +225,17 @@ def _apply_pricing_overrides(
     - Generic: {"discount_pct": 15}       — flat % discount on any platform
     """
     discount_pct = overrides.get("discount_pct", 0) or overrides.get("edp_discount_pct", 0)
-    credit_price = overrides.get("credit_price")
 
     adjusted = []
     for cost in costs:
         c = cost.model_copy()
 
-        # Snowflake credit price override
-        if credit_price and platform == "snowflake" and cost.usage_unit == "credits":
-            c.cost_usd = round(cost.usage_quantity * credit_price, 6)
+        # Snowflake is priced inside the connector (it gets the overrides via
+        # _get_connector), so AI credits and billed-USD rows keep their own
+        # rate. Re-pricing every credit here would undo that.
 
         # Per-model pricing (AI platforms)
-        elif platform in ("openai", "anthropic", "gemini"):
+        if platform in ("openai", "anthropic", "gemini"):
             model = cost.metadata.get("model", "")
             model_override = None
             for key in sorted(overrides.keys(), key=lambda x: -len(x)):
@@ -224,8 +253,10 @@ def _apply_pricing_overrides(
                     6,
                 )
 
-        # Flat percentage discount
-        if discount_pct > 0:
+        # Flat percentage discount. Billed-USD rows already include the
+        # customer's discount, so never apply it twice.
+        already_billed = str((cost.metadata or {}).get("source", "")).startswith("ORGANIZATION_USAGE")
+        if discount_pct > 0 and not already_billed:
             c.cost_usd = round(c.cost_usd * (1 - discount_pct / 100), 6)
 
         adjusted.append(c)
@@ -275,16 +306,45 @@ async def get_unified_costs(user_id: str, days: int = 30) -> dict:
     # By service
     by_service = await db.unified_costs.aggregate([
         {"$match": {"user_id": user_id, "date": {"$gte": since}}},
-        {"$group": {"_id": "$service", "cost": {"$sum": "$cost_usd"}}},
+        {"$group": {"_id": "$service", "cost": {"$sum": "$cost_usd"}, "platform": {"$first": "$platform"}}},
         {"$sort": {"cost": -1}},
     ]).to_list(50)
 
-    # Daily trend
-    daily_trend = await db.unified_costs.aggregate([
+    # Daily trend, one key per platform so the chart can stack them
+    daily_rows = await db.unified_costs.aggregate([
         {"$match": {"user_id": user_id, "date": {"$gte": since}}},
-        {"$group": {"_id": "$date", "cost": {"$sum": "$cost_usd"}}},
-        {"$sort": {"_id": 1}},
-    ]).to_list(365)
+        {"$group": {"_id": {"date": "$date", "platform": "$platform"}, "cost": {"$sum": "$cost_usd"}}},
+        {"$sort": {"_id.date": 1}},
+    ]).to_list(5000)
+    by_day: dict = {}
+    for r in daily_rows:
+        d = by_day.setdefault(r["_id"]["date"], {"date": r["_id"]["date"], "cost": 0.0})
+        d[r["_id"]["platform"]] = round(d.get(r["_id"]["platform"], 0) + r["cost"], 2)
+        d["cost"] = round(d["cost"] + r["cost"], 2)
+    daily_trend = list(by_day.values())
+
+    # Trend = second half of the window vs the first half (same length)
+    mid = (datetime.utcnow() - timedelta(days=days / 2)).strftime("%Y-%m-%d")
+
+    async def _halves(field: str) -> dict:
+        rows = await db.unified_costs.aggregate([
+            {"$match": {"user_id": user_id, "date": {"$gte": since}}},
+            {"$group": {
+                "_id": field,
+                "first": {"$sum": {"$cond": [{"$lt": ["$date", mid]}, "$cost_usd", 0]}},
+                "second": {"$sum": {"$cond": [{"$gte": ["$date", mid]}, "$cost_usd", 0]}},
+            }},
+        ]).to_list(5000)
+        out = {}
+        for r in rows:
+            key = r["_id"] if not isinstance(r["_id"], dict) else (r["_id"].get("platform"), r["_id"].get("resource"))
+            # Under $1 in the first half there is no meaningful baseline
+            # (a brand-new service would read as +43,000,000%).
+            out[key] = round((r["second"] - r["first"]) / r["first"] * 100, 1) if r["first"] >= 1 else None
+        return out
+
+    service_trend = await _halves("$service")
+    resource_trend = await _halves({"platform": "$platform", "resource": "$resource"})
 
     # Top resources
     top_resources = await db.unified_costs.aggregate([
@@ -318,14 +378,18 @@ async def get_unified_costs(user_id: str, days: int = 30) -> dict:
         "days": days,
         "by_platform": [{"platform": r["_id"], "cost": round(r["cost"], 2)} for r in by_platform],
         "by_category": [{"category": r["_id"], "cost": round(r["cost"], 2)} for r in by_category],
-        "by_service": [{"service": r["_id"], "cost": round(r["cost"], 2)} for r in by_service],
-        "daily_trend": [{"date": r["_id"], "cost": round(r["cost"], 2)} for r in daily_trend],
+        "by_service": [
+            {"service": r["_id"], "platform": r.get("platform"), "cost": round(r["cost"], 2), "trend": service_trend.get(r["_id"])}
+            for r in by_service
+        ],
+        "daily_trend": daily_trend,
         "top_resources": [
             {
                 "platform": r["_id"]["platform"],
                 "resource": r["_id"]["resource"],
                 "cost": round(r["cost"], 2),
                 "usage": round(r["usage"], 2),
+                "trend": resource_trend.get((r["_id"]["platform"], r["_id"]["resource"])),
             }
             for r in top_resources
         ],

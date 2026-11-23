@@ -31,7 +31,7 @@ export default function PlatformViewPage({
   const viewConfig = registry?.views.find((v) => v.slug === viewSlug);
 
   const { data: liveData, loading } = useApi<ViewData>(
-    !isDemo && registry ? `/platforms/${platformKey}/${viewSlug}?days=${days}&refresh=${refreshTrigger > 0}` : null,
+    !isDemo && registry ? `/platforms/${platformKey}/${viewSlug}?days=${days}&refresh=${refreshTrigger}` : null,
     [days, refreshTrigger],
   );
 

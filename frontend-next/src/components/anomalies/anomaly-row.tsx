@@ -57,18 +57,10 @@ const STATUS_VARIANT: Record<AnomalyStatus, "default" | "secondary" | "outline" 
   resolved: "outline",
 };
 
-function relativeTime(iso: string, now: number = Date.now()): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return iso;
-  const diff = now - then;
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diff < minute) return "just now";
-  if (diff < hour) return `${Math.round(diff / minute)}m ago`;
-  if (diff < day) return `${Math.round(diff / hour)}h ago`;
-  if (diff < 7 * day) return `${Math.round(diff / day)}d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function formatDay(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 export function AnomalyRow({ anomaly, onInvestigate, onAcknowledge, onMute, onMarkExpected }: AnomalyRowProps) {
@@ -77,7 +69,10 @@ export function AnomalyRow({ anomaly, onInvestigate, onAcknowledge, onMute, onMa
   const severityColor = SEVERITY_COLOR[anomaly.severity] ?? "text-slate-400";
   const dimmed = anomaly.status === "muted" || anomaly.status === "expected" || anomaly.status === "resolved";
   const statusLabel = STATUS_LABEL[anomaly.status];
-  const when = relativeTime(anomaly.detectedAt || anomaly.date);
+  // Show the day(s) the spend happened, not when the scan ran.
+  const when = anomaly.days > 1
+    ? `${formatDay(anomaly.date)} – ${formatDay(anomaly.endDate)} · ${anomaly.days} days`
+    : formatDay(anomaly.date);
   const target = [anomaly.platform, anomaly.resource].filter(Boolean).join(" · ") || "Total spend";
 
   return (
@@ -106,7 +101,7 @@ export function AnomalyRow({ anomaly, onInvestigate, onAcknowledge, onMute, onMa
             <span className="ml-auto text-sm font-semibold tabular-nums">
               <span className={cn(deltaPositive ? "text-red-500" : "text-emerald-500")}>
                 {deltaPositive ? "+" : ""}
-                {formatCurrency(anomaly.deltaUsd)}
+                {formatCurrency(anomaly.days > 1 ? anomaly.extraUsd : anomaly.deltaUsd)}
               </span>
               <span className="text-muted-foreground font-normal ml-1.5">
                 ({deltaPositive ? "+" : ""}
@@ -119,15 +114,15 @@ export function AnomalyRow({ anomaly, onInvestigate, onAcknowledge, onMute, onMa
             id={`anomaly-${anomaly.id}-headline`}
             className="text-sm font-semibold text-foreground"
           >
-            {target} {anomaly.scope === "resource" ? "resource spike" : anomaly.scope === "platform" ? "platform spike" : "spike vs baseline"}
+            {target} {anomaly.days > 1 ? "running high" : anomaly.scope === "resource" ? "spike" : anomaly.scope === "platform" ? "platform spike" : "spike"}
           </h3>
 
-          <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+          <p className="text-sm text-muted-foreground mt-1">
             {anomaly.message}
           </p>
 
-          <p className="text-xs text-muted-foreground mt-1.5 italic">
-            Likely cause: {cause}
+          <p className="text-sm text-foreground/80 mt-1.5">
+            <span className="font-medium">{anomaly.cause ? "Why: " : "Likely cause: "}</span>{cause}
           </p>
         </div>
       </div>

@@ -114,7 +114,7 @@ costly/
 
 ### Docker Services (5 containers)
 ```
-nginx       → ports 80/443, reverse proxy
+nginx       → ports 80/443, reverse proxy (`--profile prod` only)
 frontend    → port 3000, Next.js standalone
 backend     → port 8000, FastAPI with 4 Uvicorn workers
 redis       → port 6379, cache
@@ -124,7 +124,7 @@ mongodb     → port 27017, persistent volume
 ### Deploy Process
 ```bash
 docker compose build --no-cache frontend backend
-docker compose up -d
+docker compose --profile prod up -d   # nginx only starts with the prod profile
 ```
 
 ### Important: NEXT_PUBLIC_ env vars

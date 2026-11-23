@@ -25,8 +25,10 @@ async def evaluate_all_alerts():
     """Run every 15 minutes: check all enabled alerts against live Snowflake data."""
     print(f"[ALERT ENGINE] Running evaluation at {datetime.utcnow().isoformat()}")
     try:
-        active_conns = await db.snowflake_connections.find({"is_active": True}).to_list(1000)
-        conn_by_user = {c["user_id"]: c for c in active_conns}
+        from app.deps import all_snowflake_sources
+        conn_by_user: dict = {}
+        for c in await all_snowflake_sources():
+            conn_by_user.setdefault(c["user_id"], []).append(c)
 
         if not conn_by_user:
             return
@@ -42,8 +44,12 @@ async def evaluate_all_alerts():
 
         for alert in alerts:
             user_id = alert["user_id"]
-            conn_doc = conn_by_user.get(user_id)
-            if not conn_doc:
+            conns = conn_by_user.get(user_id) or []
+            # An alert can name one account; otherwise it watches every
+            # Snowflake account the user connected and fires on the highest.
+            if alert.get("connection_id"):
+                conns = [c for c in conns if c.get("connection_id") == alert["connection_id"]]
+            if not conns:
                 continue
 
             last_fired = alert.get("last_fired_at")
@@ -55,13 +61,16 @@ async def evaluate_all_alerts():
                 except Exception:
                     pass
 
-            try:
-                current_value = await run_in_thread(
-                    sync_fetch_metric, conn_doc, alert["metric"]
-                )
-            except Exception as e:
-                print(f"[ALERT ENGINE] Failed to fetch metric '{alert['metric']}' for user {user_id}: {e}")
+            values = []
+            for conn_doc in conns:
+                try:
+                    v = await run_in_thread(sync_fetch_metric, conn_doc, alert["metric"])
+                    values.append((float(v or 0), conn_doc.get("connection_name") or conn_doc.get("account", "")))
+                except Exception as e:
+                    print(f"[ALERT ENGINE] Failed to fetch metric '{alert['metric']}' for user {user_id}: {e}")
+            if not values:
                 continue
+            current_value, account_label = max(values)
 
             if current_value >= alert["threshold"]:
                 print(f"[ALERT ENGINE] FIRING: '{alert['name']}' - {alert['metric']} = {current_value} >= {alert['threshold']}")
@@ -69,7 +78,7 @@ async def evaluate_all_alerts():
                 if alert["channel"] == "slack" and alert.get("webhook_url"):
                     _send_alert_slack(
                         alert["webhook_url"],
-                        alert["name"],
+                        f"{alert['name']} ({account_label})" if len(values) > 1 else alert["name"],
                         alert["metric"],
                         alert["threshold"],
                         current_value,
